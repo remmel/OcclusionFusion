@@ -3,8 +3,8 @@ import torch
 from glob import glob
 import numpy as np
 from tqdm import tqdm
-from utils import rigid_icp
-from model import MotionCompleteNet
+from motion_complete_utils import rigid_icp
+from motion_model import MotionCompleteNet
 
 
 class Demo:
@@ -129,6 +129,7 @@ class Demo:
         up_sample_idx2 = torch.from_numpy(np.array(up_sample_idx2).astype(np.int64)).to(device)
         up_sample_idx3 = torch.from_numpy(np.array(up_sample_idx3).astype(np.int64)).to(device)
 
+
         return node_pos_torch, curr_motion_torch, historical_motion_torch, \
                [edge_index_l0, edge_index_l1, edge_index_l2, edge_index_l3], \
                [down_sample_idx1, down_sample_idx2, down_sample_idx3], \
@@ -162,7 +163,8 @@ class Demo:
 
 
 if __name__ == '__main__':
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
 
     input_path = './data/input/'
     output_path = './data/output/'
