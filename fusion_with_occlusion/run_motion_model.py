@@ -82,8 +82,6 @@ class MotionCompleteNet_Runner:
             # node num of current frame could be larger than the previous frame, and new nodes will be add to the end of the node array
             node_motion_prev = node_pos[:node_pos_prev.shape[0]] - node_pos_prev
 
-            print(node_motion_prev.shape,visible_prev.shape,node_pos_prev.shape)
-
             rigid_R, rigid_t = self.rigid_icp(node_pos_prev[visible_prev, :], node_pos_prev[visible_prev, :] + node_motion_prev[visible_prev, :])
             rigid_motion_prev = np.dot(node_pos_prev, rigid_R.transpose()) + rigid_t - node_pos_prev
             prev_motion[:prev_node_num, :3] = (node_motion_prev - rigid_motion_prev) * 100.0

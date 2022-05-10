@@ -2,6 +2,8 @@
 import os
 import numpy as np
 import open3d as o3d
+import json
+
 
 # Nueral Tracking Modules
 from utils import image_proc
@@ -15,11 +17,17 @@ class VisualizeOpen3D(Visualizer):
 	def __init__(self,opt):
 		super().__init__(opt)
 
+		# Camera parameters, load camera parameters from savepath
+		# To save camera parameters in Open3D press D. Then copy DepthCapture*.json to savepath/camera_params.json 
+		if os.path.isfile(os.path.join(self.savepath,"camera_params.json")):
+			self.camera_params = o3d.io.read_pinhole_camera_parameters(\
+				os.path.join(self.savepath,"camera_params.json"))
+		
 
 	######################################
 	# Helper modules 					 #	
 	######################################	
-	def plot(self,object_list,title,debug):
+	def plot(self,object_list,title,debug,savename=None):
 		"""
 			Main Function which takes all open3d objects ans plots them
 			
@@ -39,6 +47,13 @@ class VisualizeOpen3D(Visualizer):
 			for o in object_list:
 				self.vis_debug.add_geometry(o)
 
+			
+			ctr = self.vis_debug.get_view_control()
+			# ctr.set_up([0,1,0])
+			# ctr.set_lookat([0,0,0])	
+			if hasattr(self,"camera_params"):	
+				ctr.convert_from_pinhole_camera_parameters(self.camera_params)	
+
 			self.vis_debug.run() # Plot and halt the program
 			self.vis_debug.destroy_window()
 			self.vis_debug.close()
@@ -54,9 +69,17 @@ class VisualizeOpen3D(Visualizer):
 			for o in object_list:
 				self.vis.add_geometry(o)
 
+			ctr = self.vis.get_view_control()
+			# ctr.set_up([0,1,0])
+			# ctr.set_lookat([0,0,0])	
+			if hasattr(self,"camera_params"):	
+				ctr.convert_from_pinhole_camera_parameters(self.camera_params)	
 
 			self.vis.poll_events()
 			self.vis.update_renderer()
+
+			if savename is not None: # Save images only when not debugging
+				self.vis.capture_screen_image(os.path.join(self.savepath,"images",savename)) # TODO: Returns segfault
 
 	@staticmethod		
 	def get_mesh(verts,faces,trans=np.zeros((3,1)),color=None,normals=None):
@@ -67,7 +90,7 @@ class VisualizeOpen3D(Visualizer):
 			o3d.utility.Vector3dVector(viz_utils.transform_pointcloud_to_opengl_coords(verts)),
 			o3d.utility.Vector3iVector(faces))
 		if color is not None:
-			color = Visualizer.get_color(color)
+			color = self.get_color(color)
 			canonical_mesh.vertex_colors = o3d.utility.Vector3dVector(color)
 		if normals is not None: 
 			canonical_mesh.vertex_normals = o3d.utility.Vector3dVector(normals)
@@ -90,15 +113,14 @@ class VisualizeOpen3D(Visualizer):
 		verts,faces,normals,color = self.tsdf.get_deformed_model()
 		return self.get_mesh(verts,faces,trans=trans,color=color,normals=normals)
 
-	@staticmethod	
-	def get_rendered_graph(nodes,edges,color=None,trans=np.zeros((1,3))):
+	def get_rendered_graph(self,nodes,edges,color=None,trans=np.zeros((1,3))):
 		"""
 			Get graph in a graph structure that can be plotted using Open3D
 			@params:
 				color: Color of nodes (could be a label, rgb color)
 				trans: np.ndarray(1,3): Global Translation of the graph for plotting 
 		"""
-		color = Visualizer.get_color(color) # Get color
+		color = self.get_color(color) # Get color
 
 		# Motion Graph
 		rendered_graph = viz_utils.create_open3d_graph(
@@ -124,14 +146,15 @@ class VisualizeOpen3D(Visualizer):
 		rendered_graph = self.get_rendered_graph(nodes,edges,trans=trans)
 		return rendered_graph
 
-	def get_rendered_deformed_graph(self,trans=np.zeros((1,3))):
+	def get_rendered_deformed_graph(self,color=None,trans=np.zeros((1,3))):
 		assert hasattr(self,'tsdf'),  "TSDF not defined. Add tsdf as attribute to visualizer first." 
 		assert hasattr(self,'warpfield'),  "Warpfield not defined. Add warpfield as attribute to visualizer first." 
 		
 		nodes = self.warpfield.get_deformed_nodes()
 		edges = self.warpfield.graph.edges
 
-		color = self.tsdf.reduced_graph_dict["valid_nodes_mask"]
+		if color is None:
+			color = self.tsdf.reduced_graph_dict["valid_nodes_mask"]
 
 		return self.get_rendered_graph(nodes,edges,color=color,trans=trans)
 
@@ -178,21 +201,16 @@ class VisualizeOpen3D(Visualizer):
 
 		color_list = self.get_color(np.arange(self.graph.nodes.shape[0]+1)) # Common color for graph and mesh 
 		color_list[-1] = 0. # Last/Background color is black
-		print(color_list)
 		rendered_graph = self.get_rendered_graph(self.graph.nodes,self.graph.edges,color=color_list,trans=np.array([0,0,0.01]))
 		
 		verts, faces, normals, _ = self.tsdf.get_mesh()  # Extract the new canonical pose using marching cubes
 		vert_anchors,vert_weights,valid_verts = self.warpfield.skin(verts)
-		print(valid_verts)
 		mesh_color = np.array([vert_weights[i,:]@color_list[vert_anchors[i,:],:] for i in range(verts.shape[0])])
 		
 		reshape_gpu_vol = [verts.shape[0],1,1]        
 		deformed_vertices = self.warpfield.deform(verts,vert_anchors,vert_weights,reshape_gpu_vol,valid_verts)    
 
 		mesh = self.get_mesh(deformed_vertices,faces,color=mesh_color,normals=normals)	
-
-
-
 
 		self.plot([mesh] + rendered_graph,"Skinned Object",debug=debug)
 
@@ -240,7 +258,7 @@ class VisualizeOpen3D(Visualizer):
 		# print(target_matches)
 		target_matches = viz_utils.transform_pointcloud_to_opengl_coords(target_matches)
 		deformed_model = self.get_model_from_tsdf()
-		target_pcd = viz_utils.get_pcd(target_image_data["im"]) # Get point cloud with max 10000 points
+		
 		
 		source_points = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(deformed_model.vertices)))
 
@@ -251,8 +269,12 @@ class VisualizeOpen3D(Visualizer):
 																					 source_points, target_matches,
 																					 corresp_weights, 0.3,
 																					 1.)	
+		if target_image_data is not None:
+			target_pcd = viz_utils.get_pcd(target_image_data["im"]) # Get point cloud with max 10000 points
 		
-		self.plot([deformed_model,target_pcd,good_matches_set],title="Deformed Model Correspondences",debug=debug)	
+			self.plot([deformed_model,target_pcd,good_matches_set],title="Deformed Model Correspondences",debug=debug)	
+		else:
+			self.plot([deformed_model,good_matches_set],title="Deformed Model Correspondences",debug=debug)	
 
 	
 	def plot_optimization(self,n_iter,deformed_points,valid_verts,target_points):
@@ -283,6 +305,40 @@ class VisualizeOpen3D(Visualizer):
 
 
 		self.plot([deformed_model,good_matches_set],f"Iteration:{n_iter}",debug=False)
+
+	def plot_opticalflow(self,source_px,source_py, target_px,target_py,trans=np.zeros((3,1)),debug=False):
+	
+		assert len(source_px) == len(source_py) == len(target_px) == len(target_py),\
+			f"Source and target must be of same length, source_px:{len(source_px)} source_py:{len(source_py)} target_px:{len(target_px)} target_px:{len(target_py)}"	
+		
+		N = len(source_px)	
+		# Create selfource pcloud
+		source = np.zeros((N,3),dtype=np.float32)
+		source[:,0] = source_px	
+		source[:,1] = source_py	
+
+
+		target = np.zeros((N,3),dtype=np.float32)
+		target[:,0] = target_px	
+		target[:,1] = target_py	
+
+		# Create optical flow color 
+		optical_flow_magnitude = np.linalg.norm(target - source,axis=1) # Find magnitude
+		optical_flow_magnitude = (optical_flow_magnitude - optical_flow_magnitude.min(keepdims=True))/(optical_flow_magnitude.max(keepdims=True) - optical_flow_magnitude.min(keepdims=True)) # Normalized
+
+		colors = np.zeros((N,3),dtype=np.float32)
+		colors[:,0] = optical_flow_magnitude # Red
+		colors[:,2] = 1 - optical_flow_magnitude # Blue 
+
+		source_pcd = o3d.geometry.PointCloud()
+		source_pcd.points = o3d.utility.Vector3dVector(source)
+		source_pcd.colors = o3d.utility.Vector3dVector(colors)
+
+		target_pcd = o3d.geometry.PointCloud()
+		target_pcd.points = o3d.utility.Vector3dVector(target)
+		target_pcd.colors = o3d.utility.Vector3dVector(colors)
+
+		self.plot([source_pcd,target_pcd],f"Optical flow",debug=debug)
 
 
 

@@ -88,27 +88,28 @@ class DeformNet(torch.nn.Module):
     def __init__(self,vis):
         super().__init__()
 
-        self.gn_num_iter = 6
+        self.gn_num_iter = 10
 
         # Controls the x,y position of deforomed nodes based on the optical flow
-        # if too low, x,y position don't update
         # If too high overshadows depth term hence deformed nodes unable to be present on the surface of target nodes
-        self.gn_data_flow = 1e-1  
+        # Since it only contains x,y term is gets stuck in local minima. It alone cannot solve the transformation 
+        self.gn_data_flow = 0
 
         # Controls the depth term of deformed nodes positiong, 
         # if too low overshadowed by data term hence nodes don't reach the surface of the deformed node, eventaully leading to them becoming invisible nodes
         # if too high reduces the effect of ARAP regularization 
+        # Here the depth term is much more important than the data flow term
         self.gn_data_depth = 1
 
         # Forces adjacent nodes to move rigidly, i.e is maintain distance between them irrecpective of transformations
         # If too low deformed nodes can move to random position and hence tsdf doesn't deform correctly 
-        self.gn_arap = 5 
+        self.gn_arap = 0.00
 
         # Loss term for motion loss in OcclusionFusion
-        self.gn_motion = 2
+        self.gn_motion = 0.0
 
-        # Limiting factor, acts as a regularizer
-        self.gn_lm_factor = 0.1
+        # Limiting factor, 
+        self.gn_lm_factor = 1e-6
 
         # Optimizer fails for > 3 iterations. Current hack is to stop update is loss increases by 1
         self.stop_loss_diff = 1
@@ -422,6 +423,9 @@ class DeformNet(torch.nn.Module):
                     deformed_points += weights[:, k].view(num_matches, 1, 1).repeat(1, 3, 1) * deformed_points_k # (num_matches, 3, 1)
 
 
+
+
+
                 # Get necessary components of deformed points.
                 eps = 1e-7 # Just as good practice, although matches should all have valid depth at this stage
 
@@ -437,6 +441,11 @@ class DeformNet(torch.nn.Module):
                 minus_fx_mul_x_div_z_2 = -fx_mul_x_div_z * deformed_z_inverse # (num_matches)
                 minus_fy_mul_y_div_z_2 = -fy_mul_y_div_z * deformed_z_inverse # (num_matches)
 
+
+                print("Difference:",torch.linalg.norm(deformed_points - target_points))    
+                print("Difference px:",torch.linalg.norm(fx_mul_x_div_z + cx - target_px.view(num_matches)))    
+                print("Difference px:",torch.linalg.norm(fy_mul_y_div_z + cy - target_py.view(num_matches)))    
+
                 for k in range(4): # Our data uses 4 anchors for every point
                     node_idxs_k = anchors[:, k] # (num_matches)
                     nodes_k = graph_nodes_i[node_idxs_k].view(num_matches, 3, 1) # (num_matches, 3, 1)
@@ -446,7 +455,12 @@ class DeformNet(torch.nn.Module):
                     # Compute skew symetric part.                
                     rotated_points_k = torch.matmul(R_current[node_idxs_k], source_points - nodes_k) # (num_matches, 3, 1) = (num_matches, 3, 3) * (num_matches, 3, 1)
                     weighted_rotated_points_k = weights_k.view(num_matches, 1, 1).repeat(1, 3, 1) * rotated_points_k # (num_matches, 3, 1)
+
+                    # print(rotated_points_k.shape)
+                    # print(weighted_rotated_points_k.shape)
                     skew_symetric_mat_data = -torch.matmul(self.vec_to_skew_mat, weighted_rotated_points_k).view(num_matches, 3, 3) # (num_matches, 3, 3)
+                    # print(self.vec_to_skew_mat.shape)
+                    # print(skew_symetric_mat_data.shape)
 
                     # Compute jacobian wrt. TRANSLATION.
                     # FLOW PART
@@ -456,21 +470,31 @@ class DeformNet(torch.nn.Module):
                     jacobian_data[data_increment_vec_1_3, 3 * num_nodes_i + 3 * node_idxs_k + 2] += lambda_data_flow * weights_k * minus_fy_mul_y_div_z_2 # (num_matches)
                     
                     # DEPTH PART
+                    jacobian_data[data_increment_vec_0_3, 3 * num_nodes_i + 3 * node_idxs_k + 0] += lambda_data_depth * weights_k # (num_matches)
+                    jacobian_data[data_increment_vec_1_3, 3 * num_nodes_i + 3 * node_idxs_k + 1] += lambda_data_depth * weights_k # (num_matches)
                     jacobian_data[data_increment_vec_2_3, 3 * num_nodes_i + 3 * node_idxs_k + 2] += lambda_data_depth * weights_k # (num_matches)
 
                     # Compute jacobian wrt. ROTATION.
                     # FLOW PART
-                    jacobian_data[data_increment_vec_0_3,                   3 * node_idxs_k + 0] += lambda_data_flow * fx_div_z * skew_symetric_mat_data[:, 0, 0] + minus_fx_mul_x_div_z_2 * skew_symetric_mat_data[:, 2, 0]
-                    jacobian_data[data_increment_vec_0_3,                   3 * node_idxs_k + 1] += lambda_data_flow * fx_div_z * skew_symetric_mat_data[:, 0, 1] + minus_fx_mul_x_div_z_2 * skew_symetric_mat_data[:, 2, 1]
-                    jacobian_data[data_increment_vec_0_3,                   3 * node_idxs_k + 2] += lambda_data_flow * fx_div_z * skew_symetric_mat_data[:, 0, 2] + minus_fx_mul_x_div_z_2 * skew_symetric_mat_data[:, 2, 2]
-                    jacobian_data[data_increment_vec_1_3,                   3 * node_idxs_k + 0] += lambda_data_flow * fy_div_z * skew_symetric_mat_data[:, 1, 0] + minus_fy_mul_y_div_z_2 * skew_symetric_mat_data[:, 2, 0]
-                    jacobian_data[data_increment_vec_1_3,                   3 * node_idxs_k + 1] += lambda_data_flow * fy_div_z * skew_symetric_mat_data[:, 1, 1] + minus_fy_mul_y_div_z_2 * skew_symetric_mat_data[:, 2, 1]
-                    jacobian_data[data_increment_vec_1_3,                   3 * node_idxs_k + 2] += lambda_data_flow * fy_div_z * skew_symetric_mat_data[:, 1, 2] + minus_fy_mul_y_div_z_2 * skew_symetric_mat_data[:, 2, 2]
+                    jacobian_data[data_increment_vec_0_3, 3 * node_idxs_k + 0] += lambda_data_flow * fx_div_z * skew_symetric_mat_data[:, 0, 0] + minus_fx_mul_x_div_z_2 * skew_symetric_mat_data[:, 2, 0]
+                    jacobian_data[data_increment_vec_0_3, 3 * node_idxs_k + 1] += lambda_data_flow * fx_div_z * skew_symetric_mat_data[:, 0, 1] + minus_fx_mul_x_div_z_2 * skew_symetric_mat_data[:, 2, 1]
+                    jacobian_data[data_increment_vec_0_3, 3 * node_idxs_k + 2] += lambda_data_flow * fx_div_z * skew_symetric_mat_data[:, 0, 2] + minus_fx_mul_x_div_z_2 * skew_symetric_mat_data[:, 2, 2]
+                    jacobian_data[data_increment_vec_1_3, 3 * node_idxs_k + 0] += lambda_data_flow * fy_div_z * skew_symetric_mat_data[:, 1, 0] + minus_fy_mul_y_div_z_2 * skew_symetric_mat_data[:, 2, 0]
+                    jacobian_data[data_increment_vec_1_3, 3 * node_idxs_k + 1] += lambda_data_flow * fy_div_z * skew_symetric_mat_data[:, 1, 1] + minus_fy_mul_y_div_z_2 * skew_symetric_mat_data[:, 2, 1]
+                    jacobian_data[data_increment_vec_1_3, 3 * node_idxs_k + 2] += lambda_data_flow * fy_div_z * skew_symetric_mat_data[:, 1, 2] + minus_fy_mul_y_div_z_2 * skew_symetric_mat_data[:, 2, 2]
                     
                     # DEPTH PART
-                    jacobian_data[data_increment_vec_2_3,                   3 * node_idxs_k + 0] += lambda_data_depth * skew_symetric_mat_data[:, 2, 0]
-                    jacobian_data[data_increment_vec_2_3,                   3 * node_idxs_k + 1] += lambda_data_depth * skew_symetric_mat_data[:, 2, 1]
-                    jacobian_data[data_increment_vec_2_3,                   3 * node_idxs_k + 2] += lambda_data_depth * skew_symetric_mat_data[:, 2, 2]
+                    jacobian_data[data_increment_vec_0_3, 3 * node_idxs_k + 0] += lambda_data_depth * skew_symetric_mat_data[:, 0, 0] 
+                    jacobian_data[data_increment_vec_0_3, 3 * node_idxs_k + 1] += lambda_data_depth * skew_symetric_mat_data[:, 0, 1] 
+                    jacobian_data[data_increment_vec_0_3, 3 * node_idxs_k + 2] += lambda_data_depth * skew_symetric_mat_data[:, 0, 2] 
+                    jacobian_data[data_increment_vec_1_3, 3 * node_idxs_k + 0] += lambda_data_depth * skew_symetric_mat_data[:, 1, 0] 
+                    jacobian_data[data_increment_vec_1_3, 3 * node_idxs_k + 1] += lambda_data_depth * skew_symetric_mat_data[:, 1, 1] 
+                    jacobian_data[data_increment_vec_1_3, 3 * node_idxs_k + 2] += lambda_data_depth * skew_symetric_mat_data[:, 1, 2] 
+
+
+                    jacobian_data[data_increment_vec_2_3, 3 * node_idxs_k + 0] += lambda_data_depth * skew_symetric_mat_data[:, 2, 0]
+                    jacobian_data[data_increment_vec_2_3, 3 * node_idxs_k + 1] += lambda_data_depth * skew_symetric_mat_data[:, 2, 1]
+                    jacobian_data[data_increment_vec_2_3, 3 * node_idxs_k + 2] += lambda_data_depth * skew_symetric_mat_data[:, 2, 2]
 
                     assert torch.isfinite(jacobian_data).all(), jacobian_data
 
@@ -481,6 +505,8 @@ class DeformNet(torch.nn.Module):
                 res_data[data_increment_vec_1_3, 0] = lambda_data_flow * (fy_mul_y_div_z + cy - target_py.view(num_matches))
                 
                 # DEPTH PART
+                res_data[data_increment_vec_0_3, 0] = lambda_data_depth * (deformed_points[:, 0, :] - target_points[:, 0, :]).view(num_matches)
+                res_data[data_increment_vec_1_3, 0] = lambda_data_depth * (deformed_points[:, 1, :] - target_points[:, 1, :]).view(num_matches)
                 res_data[data_increment_vec_2_3, 0] = lambda_data_depth * (deformed_points[:, 2, :] - target_points[:, 2, :]).view(num_matches)
 
 
@@ -562,15 +588,34 @@ class DeformNet(torch.nn.Module):
                     res = res_data
                     jac = jacobian_data
 
+
                 res = torch.cat((res,res_motion),0)    
                 jac = torch.cat((jac,jacobian_motion),0)    
+
+
 
                 timer_system_start = timer()
 
                 # Compute A = J^TJ and b = -J^Tr.
                 jac_t = torch.transpose(jac, 0, 1)
                 A = torch.matmul(jac_t, jac)
-                b = torch.matmul(-jac_t, res)
+                b = torch.matmul(-jac_t, res) # Gradient
+
+
+                # Gradient data translation
+                print("Gradient trans x:",b[3 * num_nodes_i:].view(-1,3)[::100])
+
+
+                # # Gradient arap translation
+                # print("Gradient arap x:",b[3 * num_nodes_i + 3 * node_idxs_k + 0,num_matches:num_matches+num_edges_i])
+                # print("Gradient arap y:",b[3 * num_nodes_i + 3 * node_idxs_k + 1,num_matches:num_matches+num_edges_i])
+                # print("Gradient arap z:",b[3 * num_nodes_i + 3 * node_idxs_k + 2,num_matches:num_matches+num_edges_i])
+
+                # # Gradient motion translation
+                # print("Gradient moti x:",b[3 * num_nodes_i + 3 * node_idxs_k + 0,:-num_nodes_i])
+                # print("Gradient moti y:",b[3 * num_nodes_i + 3 * node_idxs_k + 1,:-num_nodes_i])
+                # print("Gradient moti z:",b[3 * num_nodes_i + 3 * node_idxs_k + 2,:-num_nodes_i])
+
 
                 # Solve linear system Ax = b.
                 A = A + torch.eye(A.shape[0], dtype=A.dtype, device=A.device) * lm_factor
@@ -644,6 +689,8 @@ class DeformNet(torch.nn.Module):
 
                 R_current = torch.matmul(R_inc, R_current)
                 t_current = t_current + t_inc
+
+                print("Updating Translation:",t_inc.view(-1,3)[::100])
 
 
                 if num_edges_i > 0:

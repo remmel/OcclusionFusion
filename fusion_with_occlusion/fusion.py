@@ -35,6 +35,8 @@ class DynamicFusion:
 		self.model = Deformnet_runner(self.vis,opt)
 		self.motion_complete_model = MotionCompleteNet_Runner(opt)	
 
+		self.model.vis = self.vis
+
 	def create_tsdf(self):
 		# Need to load initial frame 
 		self.target_frame = self.opt.source_frame

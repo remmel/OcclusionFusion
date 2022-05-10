@@ -96,9 +96,9 @@ class WarpField:
         dist, anchors = kdtree.query(points, k=self.graph_neighbours)
 
         anchors = anchors.astype(np.int32) # Convert from uint to int 
-
+        
         # Removes miss alignments but reduces new surface from being added
-        dist[dist > 3*self.node_coverage] = np.inf
+        dist[dist > 4*self.node_coverage] = np.inf
 
 
 

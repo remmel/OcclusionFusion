@@ -33,7 +33,6 @@ pip install pynput pycuda cupy pykdtree
 2. Update max depth in fusion.py, currently sending maximum depth of first frame. Can do better. Need to calculate the bound of the segmented object in complete video
 3. Refactor TSDF code, one bigger kernel better that smaller kernel but we can create a folder dedicated to TSDF for better understanding
 7. Deleting optical flow data for now. Might need to saved later. 
-13. If some cluster has not nodes in reduced cluster what shoud we do ?  
 14. Visvualize num_iterations hyperparamater for erosotion while adding new nodes 
 16. Replace direct get such as tsdf.canonical_model, warpfiled.deformed_model with get_canonical_model, get_deformed_graph_nodes 
 18. Update logger to show colored log, defined in self.log 
@@ -46,7 +45,6 @@ pip install pynput pycuda cupy pykdtree
 26. Check values deformed graph node poisitions using optical flow flow
 27. Add tests to measure deformation of nodes using OcclusionFusion Model 
 28. Add tests to see write values are getting passed to occlusion fusion and optimization
-29. Add tests to review optimization.
 # Tests: 
 ```
 python3 ./tests.sh // Run Tests to see if working perfectly
@@ -55,6 +53,7 @@ The file runs the following tests
 1. Check if deformation happening correctly
 2. Check with and without gpu 
 3. Check if ARAP is working
+4. Check optimization
 
 Test TODO:- 
 1. Check normals are getting deformed perfectly. 

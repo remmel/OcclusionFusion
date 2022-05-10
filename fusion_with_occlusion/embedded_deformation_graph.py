@@ -65,7 +65,10 @@ class EDGraph:
                 'num_neighbours'        : 8,    # Maximum number of neighbours
                 'require_mask'          : True,
                 }
+            with open(os.path.join(self.opt.datadir,'graph_config.json'), "w") as f:
+                json.dump(self.graph_generation_parameters, f)    
 
+    
 
     def create_graph_from_tsdf(self):
         

@@ -16,32 +16,34 @@ class Visualizer: # Base Class which contains all the preprocessing to visualize
         os.makedirs(os.path.join(self.savepath,"images"),exist_ok=True)
         os.makedirs(os.path.join(self.savepath,"video"),exist_ok=True)
 
-    @staticmethod       
-    def get_color_from_labels(labels):
+        self.colors = np.array([])
+
+    def get_color_from_labels(self,labels):
         num_labels = int(np.unique(labels).max())+1
 
-        colors = []
-        for i in range(num_labels):
-            if i < 10:
-                colors.append(plt.get_cmap("tab10")(i)[:3])
-            elif i < 22:
-                colors.append(plt.get_cmap("Paired")(i-10)[:3])
-            elif i < 30:
-                colors.append(plt.get_cmap("Accent")(i-22)[:3])
-            else:
-                colors.append(np.random.random(3))
+        if num_labels > self.colors.shape[0]:
 
-        colors = np.array(colors)
-        return colors[labels,:]
+            colors = []
+            for i in range(num_labels):
+                if i < 10:
+                    colors.append(plt.get_cmap("tab10")(i)[:3])
+                elif i < 22:
+                    colors.append(plt.get_cmap("Paired")(i-10)[:3])
+                elif i < 30:
+                    colors.append(plt.get_cmap("Accent")(i-22)[:3])
+                else:
+                    colors.append(np.random.random(3))
+
+            self.colors = np.array(colors)
+        return self.colors[labels,:]
     
-    @staticmethod       
-    def get_color(color):
+    def get_color(self,color):
         if color is None:
             return None
         elif len(np.squeeze(color).shape) == 1:         
             color = color.astype(np.uint64)
             # Get color from a label using matplotlib
-            return Visualizer.get_color_from_labels(color)
+            return self.get_color_from_labels(color)
         else: 
             assert color.shape[-1] == 3 or color.shape[-1] == 4, f"Expected information in RGB(Nx3) or RGBA(Nx4) found:{color.shape}" 
 

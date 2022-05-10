@@ -1,5 +1,7 @@
 # This folder contains optimization tests for OcclusionFusion/NeuralTracking
 
+import os
+
 # Python Imports
 import numpy as np
 import open3d as o3d
@@ -12,117 +14,347 @@ from vis import get_visualizer # Visualizer
 from run_model import Deformnet_runner # Neural Tracking + ARAP Moudle 
 
 # Test imports 
-from .test_utils import Dict2Class,TSDFMesh
+from .test_utils import Dict2Class
+
+from .ssdr import SSDR
+
+
+# Base TSDF class (instead of using a volumetric representation using Mesh)
+class TSDFMesh:
+	def __init__(self,fopt,mesh):
+		"""
+			Given a mesh TSDF mesh contains the gr data. 
+			@params:
+				fopt: 
+
+
+		"""
+		self.fopt = fopt
+		# Estimate normals for future use
+		self.frame_id = fopt.source_frame
+
+		self.mesh = mesh
+
+	def set_data(self,trajectory,trajectory_normals):
+		self.trajectory = trajectory
+		self.trajectory_normals = trajectory_normals
+
+	def get_mesh(self):
+		faces = np.asarray(self.mesh.triangles)         
+
+		return self.trajectory[0],faces,self.trajectory_normals[0],None
+
+	def get_canonical_model(self):
+		return self.get_mesh()	
+
+	def check_visibility(self,points):
+		return np.ones(points.shape[0],dtype=np.bool),np.zeros(points.shape[0],dtype=np.bool)
+
+	def get_source_data(self):
+		return self.trajectory[self.frame_id], self.trajectory_normals[self.frame_id]
+
+	def get_target_data(self):
+		return self.trajectory[self.frame_id+self.fopt.skip_rate], self.trajectory_normals[self.frame_id+self.fopt.skip_rate]
+
+
+class TestModel(Deformnet_runner):
+	def __init__(self,vis,fopt):
+		super().__init__(vis,fopt)
+
+	def get_predicted_location(self,optical_flow_data, vertices,valid_verts,intrinsics):
+
+		N = vertices.shape[0] 
+		valid_mask = valid_verts & np.ones(N,dtype=np.bool)
+
+		source_points,source_points_normals = self.tsdf.get_source_data()
+		target_points,target_points_normals = self.tsdf.get_target_data()
+		
+		fx = intrinsics[0]
+		fy = intrinsics[1]
+		cx = intrinsics[2]
+		cy = intrinsics[3]
+
+		source_points_px = source_points[:,0]*fx/source_points[:,2] + cx
+		source_points_py = source_points[:,1]*fy/source_points[:,2] + cy
+
+		target_points_px = target_points[:,0]*fx/target_points[:,2] + cx
+		target_points_py = target_points[:,1]*fy/target_points[:,2] + cy
+
+
+		# self.vis.plot_opticalflow(source_points_px,source_points_py,target_points_px,target_points_py,debug=True)
+
+		return valid_mask,target_points,target_points_normals,target_points_px,target_points_py
+		
 
 def test1(use_gpu=True):
 	"""
 		Rotating and translating sphere.
-
-		1. Random nodes of the graph have pose estimation. Hence will use ARAP to calculate them 
-		2. First 10% nodes have no pose estimation
-
 	"""  
 
 	fopt = Dict2Class({"source_frame":0,\
 		"gpu":use_gpu,"visualizer":"open3d",\
-		"datadir":"/media/shubh/Elements/DeepDeform_Tests/sphere",\
+		"datadir":"/media/srialien/Elements/DeepDeform_Tests/sphere",\
 		"skip_rate":1})
 	vis = get_visualizer(fopt)
 
+
+
+
 	# Create sphere
-	mesh_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1,create_uv_map=True)
-	mesh_sphere.translate([1,-10,-2])
+	mesh_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1)
+	# center = np.array([-0.3,0,-2])
+	# mesh_sphere.translate(center)
 	mesh_sphere.paint_uniform_color([1.0,0,0]) # Red color sphere
 
-	mesh_sphere.textures = [o3d.geometry.Image(o3d.io.read_image("/home/shubh/Downloads/earth.jpeg"))]
 
-	o3d.visualization.draw_geometries([mesh_sphere])
+	# Generate data
+	trajectory = [np.asarray(mesh_sphere.vertices)]
+	
+	mesh_sphere.compute_vertex_normals(normalized=True)
+	trajectory_normals = [np.asarray(mesh_sphere.vertex_normals)]
 
+	rotations = [np.eye(3)]
+	translations = [np.zeros(3)]
+
+	rotmat = R.from_rotvec(np.random.random(3)*np.pi).as_matrix().astype(np.float32)
+	trans = [0,0,0]
+	for _ in range(0,100):
+		
+		# Create random rotations to deform object
+		mesh_sphere.rotate(rotmat)
+		mesh_sphere.translate(trans)
+
+		center = mesh_sphere.get_center()
+		print("Center:",center)
+
+		rotations.append(rotmat@rotations[-1])
+		translations.append(rotmat@translations[-1] - rotmat@center + center + trans)
+
+		trajectory.append(np.array(mesh_sphere.vertices))
+
+		mesh_sphere.compute_vertex_normals(normalized=True)
+		trajectory_normals.append(np.array(mesh_sphere.vertex_normals))
+
+
+	rotations = np.array(rotations)
+	translations = np.array(translations)	
+	trajectory = np.array(trajectory,dtype=np.float32)
+	trajectory_normals = np.array(trajectory_normals,dtype=np.float32)
+
+	mesh_sphere.vertices = o3d.utility.Vector3dVector(trajectory[0])
 
 
 	# Create fusion modules 
 	tsdf = TSDFMesh(fopt,mesh_sphere)
+	tsdf.set_data(trajectory,trajectory_normals)
+
 	graph = EDGraph(tsdf,vis)
 	warpfield = WarpField(graph,tsdf,vis)
-	model = Deformnet_runner()	
+	model = TestModel(vis,fopt)	
 
 	# Add modules to vis
 	vis.tsdf = tsdf
 	vis.graph = graph
 	vis.warpfield = warpfield
-
+	
+	# Add modules to model
 	model.graph = graph
 	model.warpfield = warpfield
+	model.tsdf = tsdf
+	model.vis = vis
+
+	# Update tsdf 
+	tsdf.reduced_graph_dict = {"valid_nodes_mask":np.ones(graph.nodes.shape[0],dtype=np.bool)}
+
 	# Create sphere
-	vis.plot_graph(None,title="Embedded Graph",debug=True)
+	# vis.plot_skinned_model(debug=True)	
 
 
 
-	for i,frame_ind in range(0,100):
+
+	T = tsdf.trajectory.shape[0]
+
+	intrinsics = np.array([1,1,0,0],dtype=np.float32)
+
+	for target_frame_id in range(fopt.skip_rate,T-1,fopt.skip_rate):
 		
-		# Create random rotations to deform object
-		rotmat = R.from_rotvec(np.random.random(3)*np.pi).as_matrix().astype(np.float32)		
-		tsdf.mesh.rotate(rotmat)
-		tsdf.mesh.translate(np.random.random(3)-0.5)
-
-		# Set visible nodes
-		visible_nodes = np.ones(graph.num_nodes,dtype=np.bool)	
-
-		
+		print(f"Frame id:{target_frame_id}")
+		# Optical flow data not required, returned by tsdf for the test
+		optical_flow_data = {"source_id":target_frame_id - fopt.skip_rate,"target_id":target_frame_id}
 
 		# Get deformed graph positions  
-		target_vertices = np.asarray(tsdf.mesh.vertices,dtype=np.float32)
+		source_vertices = tsdf.trajectory[target_frame_id - fopt.skip_rate]
+		source_graph_nodes = source_vertices[graph.node_indices]
+		
+		target_vertices = tsdf.trajectory[target_frame_id]
 		target_graph_nodes = target_vertices[graph.node_indices]
 
-		# Create reduce graph dict  
-		deformed_nodes = warpfield.get_deformed_nodes()
-		reduced_graph_dict = graph.get_reduced_graph(visible_nodes) # Get reduced graph at initial frame
-		reduced_graph_dict["all_nodes_at_source"] = deformed_nodes 
-		reduced_graph_dict["valid_nodes_at_source"] = deformed_nodes[visible_nodes] # update reduced graph at timestep t-1
-		tsdf.reduced_graph_dict = reduced_graph_dict 	
+		node_motion_data = target_graph_nodes - source_graph_nodes, np.ones(graph.nodes.shape[0],dtype=np.float32)
 
-		# warpfield.deformed_nodes[visible_nodes] = deformed_nodes[visible_nodes]
-		# vis.plot_deformed_graph(debug=True)
-
-		print(f"Test:{i} => percentage:{invisible_node_percentage} num_invisible_nodes:{num_invisible_nodes}/{graph.num_nodes}")
-
-		# Get transformations to update tsdf from t-1 to t
-		graph_deformation_data = {}
-		graph_deformation_data['source_frame_id'] =  0
-		graph_deformation_data['target_frame_id'] =  i
-
-		graph_deformation_data["deformed_nodes_to_target"] = target_graph_nodes[visible_nodes]
-		graph_deformation_data["node_translations"] = target_graph_nodes[visible_nodes] - warpfield.deformed_nodes[visible_nodes]
-		graph_deformation_data['node_rotations'] = np.tile(rotmat[None],(reduced_graph_dict["num_nodes"],1,1))
-
-		# Run as rigid as possible 
-		estimated_complete_graph_parameters = model.run_arap(\
-			reduced_graph_dict,
-			graph_deformation_data,
-			graph,warpfield)
-
-		# Update warpfield parameters, warpfield maps intial frme to frame t 
-		warpfield.update_transformations(estimated_complete_graph_parameters)
+		estimated_transformations = model.optimize(optical_flow_data,node_motion_data,intrinsics,None)
 
 
-
+		# Update warpfield parameters, warpfield maps to target frame  
+		warpfield.update_transformations(estimated_transformations)
 
 		# TSDF gets updated last
-		tsdf.frame_id = i		
+		tsdf.frame_id = target_frame_id		
+
 
 		# Evaluate results 
-		rec_err_per_sample = np.linalg.norm(warpfield.deformed_nodes[invisible_nodes]-target_vertices[graph.node_indices[invisible_nodes]],axis=1)
+		rec_err_per_sample = np.linalg.norm(warpfield.deformed_nodes - target_vertices[graph.node_indices],axis=1)
 		print("Reconstructon Error:",np.mean(rec_err_per_sample))
 
-		high_error_invisible_nodes = np.where(rec_err_per_sample > 1e-3)[0]
-		high_error_nodes = invisible_nodes[high_error_invisible_nodes]
-		print("Problembatic Nodes:",np.vstack([high_error_nodes]))
-		# print("Gr Translation:",np.mean(warpfield.translations[visible_nodes],axis=0,keepdims=True))
-		# print("High Error Node Translations:",warpfield.translations[high_error_nodes])
-		# print("Difference in translations:", warpfield.translations[high_error_nodes] - np.mean(warpfield.translations[visible_nodes],axis=0,keepdims=True))
+		# high_error_visible_nodes = np.where(rec_err_per_sample > 1e-3)[0]
+		# print("Problembatic Nodes:",high_error_visible_nodes)
 
-		# print("Gr rotations:",warpfield.rotations[visible_nodes][0:4])
-		# print("High Error Node rotationss:",warpfield.rotations[high_error_nodes])
+		# print("Reconstruction Differnce per sample:",rec_err_per_sample[high_error_visible_nodes])
+
+
+		# gr_translation = -tsdf.rotations[target_frame_id]@center + center + tsdf.translations[target_frame_id]
+
+		# print("Gr Translation:",gr_translation)
+		# print("High Error Node Translations:",warpfield.translations[high_error_visible_nodes])
+		# print("Difference in translations:", warpfield.translations[high_error_visible_nodes] - gr_translation[None,:])
+
+		# print("Gr rotations:",tsdf.rotations)
+		# print("High Error Node rotations:",warpfield.rotations[high_error_visible_nodes])
+
+
+
 
 		# Plot deformed graph with different color 
-		vis.plot_deformed_graph(debug=True)	
+		init_graph = vis.get_rendered_graph(graph.nodes,graph.edges) # Initial graph 
+		if not hasattr(vis,'bbox'):
+			vis.bbox = (init_graph[0].get_max_bound() - init_graph[0].get_min_bound()) # Compute bounding box using nodes of init graph
+
+		bbox = vis.bbox
+
+		deformed_graph = vis.get_rendered_deformed_graph(trans=np.array([1,0,0])*bbox)
+
+		target_graph = vis.get_rendered_graph(target_graph_nodes,graph.edges,trans=np.array([2,0,0])*bbox) # Actualy position 
+		vis.plot(init_graph + deformed_graph + target_graph,"Deformed Graph",False)		
+
+
+
+def test2(use_gpu=True):
+	"""
+		Tests on Anime Files from deforming things4D
+	"""  
+	fopt = Dict2Class({"source_frame":0,\
+		"gpu":use_gpu,"visualizer":"open3d",\
+		"datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/mannequin_Running",\
+		"skip_rate":1})
+	vis = get_visualizer(fopt)
+
+	ssdr = SSDR()
+	filname = fopt.datadir.split("/")[-1] + '.anime'
+	trajectory,faces = ssdr.load_anime_file(os.path.join(fopt.datadir,filname))
+
+	mesh = o3d.geometry.TriangleMesh(
+			o3d.utility.Vector3dVector(trajectory[0]),
+			o3d.utility.Vector3iVector(faces))
+
+	# Compute normals 
+	trajectory_normals = []
+	for traj in trajectory:
+		mesh.vertices = o3d.utility.Vector3dVector(traj)
+		mesh.compute_vertex_normals(normalized=True)
+		normals = np.array(mesh.vertex_normals)
+		trajectory_normals.append(normals)
+
+	trajectory_normals = np.array(trajectory_normals)	
+
+
+	# Create fusion modules 
+	tsdf = TSDFMesh(fopt,mesh)
+	tsdf.set_data(trajectory,trajectory_normals)
+
+
+	graph = EDGraph(tsdf,vis)
+	warpfield = WarpField(graph,tsdf,vis)
+	model = TestModel(vis,fopt)	
+
+	# Add modules to vis
+	vis.tsdf = tsdf
+	vis.graph = graph
+	vis.warpfield = warpfield
+	
+	# Add modules to model
+	model.graph = graph
+	model.warpfield = warpfield
+	model.tsdf = tsdf
+	model.vis = vis
+
+	tsdf.reduced_graph_dict = {"valid_nodes_mask":np.ones(graph.nodes.shape[0],dtype=np.bool)}
+
+	deformed_vertices,deformed_normals,vert_anchors,vert_weights,valid_verts = warpfield.deform_mesh(trajectory[0],trajectory_normals[0])
+	relative_transform_matrix,rmse_error = ssdr.get_transforms(trajectory,faces,vert_anchors,vert_weights,graph.nodes)
+	
+	print("Relative Transforms:",relative_transform_matrix)
+	print("Rsme Error:",rmse_error)
+
+
+
+	T = tsdf.trajectory.shape[0]
+
+	intrinsics = np.array([1,1,0,0],dtype=np.float32)
+
+	for target_frame_id in range(fopt.skip_rate,T-1,fopt.skip_rate):
+		
+		print(f"Frame id:{target_frame_id}")
+		# Optical flow data not required, returned by tsdf for the test
+		optical_flow_data = {"source_id":target_frame_id - fopt.skip_rate,"target_id":target_frame_id}
+
+		# Get deformed graph positions  
+		source_vertices = tsdf.trajectory[target_frame_id - fopt.skip_rate]
+		source_graph_nodes = source_vertices[graph.node_indices]
+		
+		target_vertices = tsdf.trajectory[target_frame_id]
+		target_graph_nodes = target_vertices[graph.node_indices]
+
+		node_motion_data = target_graph_nodes - source_graph_nodes, np.ones(graph.nodes.shape[0],dtype=np.float32)
+
+		estimated_transformations = model.optimize(optical_flow_data,node_motion_data,intrinsics,None)
+
+
+		# Update warpfield parameters, warpfield maps to target frame  
+		warpfield.update_transformations(estimated_transformations)
+
+		# TSDF gets updated last
+		tsdf.frame_id = target_frame_id		
+
+
+		# Evaluate results 
+		rec_err_per_sample = np.linalg.norm(warpfield.deformed_nodes - target_vertices[graph.node_indices],axis=1)
+		print("Reconstructon Error:",np.mean(rec_err_per_sample))
+
+		# high_error_visible_nodes = np.where(rec_err_per_sample > 1e-3)[0]
+		# print("Problembatic Nodes:",high_error_visible_nodes)
+
+		# print("Reconstruction Differnce per sample:",rec_err_per_sample[high_error_visible_nodes])
+
+
+		# gr_translation = -tsdf.rotations[target_frame_id]@center + center + tsdf.translations[target_frame_id]
+
+		# print("Gr Translation:",gr_translation)
+		# print("High Error Node Translations:",warpfield.translations[high_error_visible_nodes])
+		# print("Difference in translations:", warpfield.translations[high_error_visible_nodes] - gr_translation[None,:])
+
+		# print("Gr rotations:",tsdf.rotations)
+		# print("High Error Node rotations:",warpfield.rotations[high_error_visible_nodes])
+
+
+
+
+		# Plot deformed graph with different color 
+		init_graph = vis.get_rendered_graph(graph.nodes,graph.edges) # Initial graph 
+		if not hasattr(vis,'bbox'):
+			vis.bbox = (init_graph[0].get_max_bound() - init_graph[0].get_min_bound()) # Compute bounding box using nodes of init graph
+
+		bbox = vis.bbox
+
+		deformed_graph = vis.get_rendered_deformed_graph(trans=np.array([1,0,0])*bbox)
+
+		target_graph = vis.get_rendered_graph(target_graph_nodes,graph.edges,trans=np.array([2,0,0])*bbox) # Actualy position 
+		vis.plot(init_graph + deformed_graph + target_graph,"Deformed Graph",target_frame_id > 50)		

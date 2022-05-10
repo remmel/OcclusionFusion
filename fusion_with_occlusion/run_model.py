@@ -152,8 +152,8 @@ class Deformnet_runner():
 		target_points = points.copy()	
 		target_points[valid_mask] = points_target_location[valid_mask]
 
-		target_point_normals = np.zeros_like(points)
-		target_point_normals[valid_mask] = points_target_normals[valid_mask]
+		target_points_normals = np.zeros_like(points)
+		target_points_normals[valid_mask] = points_target_normals[valid_mask]
 
 		# Update px, py to co
 		target_points_px = px.copy()
@@ -162,7 +162,7 @@ class Deformnet_runner():
 		target_points_py[valid_mask] = points_target_pixels[valid_mask,1] 
 
 
-		return valid_mask,target_points,target_point_normals,target_points_px,target_points_py
+		return valid_mask,target_points,target_points_normals,target_points_px,target_points_py
 
 	def optimize(self,optical_flow_data,node_motion_data,intrinsics,target_frame_data):
 		"""
@@ -173,6 +173,7 @@ class Deformnet_runner():
 		vertices,faces,normals,colors = self.tsdf.get_canonical_model()
 
 		deformed_vertices,deformed_normals,vert_anchors,vert_weights,valid_verts = self.warpfield.deform_mesh(vertices,normals)
+		self.log.debug(f"Deformed Vertices:{np.sum(valid_verts)}")
 
 		# Check their visibility and update visible nodes
 		visible_verts, depth_diff = self.tsdf.check_visibility(deformed_vertices[valid_verts])	
@@ -181,12 +182,20 @@ class Deformnet_runner():
 		self.log.debug(f"Visible Skinned Vertices:{np.sum(valid_verts)}")
 
 
-		valid_verts,target_points,target_point_normals,target_points_px,target_points_py = self.get_predicted_location(optical_flow_data,vertices,valid_verts,intrinsics)
+		valid_verts,target_points,target_points_normals,target_points_px,target_points_py = self.get_predicted_location(optical_flow_data,vertices,valid_verts,intrinsics)
 
 		self.log.debug(f"Valid Visible Skinned Vertices:{np.sum(valid_verts)}")
 
 
 		# self.vis.plot_correspondence(target_points,valid_verts,target_frame_data)
+
+
+		# Checks during debug
+		# self.log.debug(f"Anchors:{vert_anchors[::100]}")
+		self.log.debug(f"All Anchors are being used:{len(np.unique(vert_anchors))==len(self.graph.nodes)}")
+
+		# self.log.debug(f"Weights:{vert_weights[::100]}, {vert_weights.shape}")
+		# self.log.debug(f"Sum of all weights is 1?:{np.sum(vert_weights,axis=1)}")
 
 
 		mu, confidence = node_motion_data
@@ -212,13 +221,14 @@ class Deformnet_runner():
 		intrinsics_cuda           = torch.from_numpy(intrinsics).cuda().unsqueeze(0)
 
 		target_points_cuda 	      = torch.from_numpy(target_points[valid_verts]).cuda().unsqueeze(0)
-		target_normals_cuda 	  = torch.from_numpy(target_point_normals[valid_verts]).cuda().unsqueeze(0)	
+		target_normals_cuda 	  = torch.from_numpy(target_points_normals[valid_verts]).cuda().unsqueeze(0)	
 		target_points_px_cuda	  = torch.from_numpy(target_points_px[valid_verts]).cuda().unsqueeze(0)	
 		target_points_py_cuda	  = torch.from_numpy(target_points_py[valid_verts]).cuda().unsqueeze(0)	 
 
 		rotations_cuda 			  = torch.from_numpy(rotations).cuda().unsqueeze(0)	 
 		translations_cuda 		  = torch.from_numpy(translations).cuda().unsqueeze(0)	 
 
+		# self.log.debug(f"Difference:{target_node_position_cuda - target_points_cuda[:,self.graph.node_indices]}")
 
 		self.log.debug("Num Matches variable sizes:")
 		self.log.debug(f"vertices:{vertices_cuda.shape}")
@@ -236,7 +246,6 @@ class Deformnet_runner():
 		self.log.debug(f"graph_edges_weights:{graph_edges_weights_cuda.shape}")
 		self.log.debug(f"rotations:{rotations_cuda.shape}")
 		self.log.debug(f"translations:{translations_cuda.shape}")
-
 
 
 		model_data = self.model.optimize(graph_nodes_cuda,graph_edges_cuda,graph_edges_weights_cuda,graph_clusters_cuda,num_nodes_cuda,
