@@ -25,11 +25,16 @@ logging.getLogger('PIL').setLevel(logging.WARNING)
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
 
+
+
 logging.getLogger('embedded_deformation_graph').setLevel(logging.DEBUG)
 logging.getLogger('run_motion_model').setLevel(logging.DEBUG)
+# motion_complete_model_test.plot_motion_complete_tests_rec_error()
 # motion_complete_model_test.test1()
 # motion_complete_model_test.test2()
-motion_complete_model_test.test3()
+# motion_complete_model_test.test3()
+# motion_complete_model_test.test4()
+# motion_complete_model_test.test5()
 logging.getLogger('embedded_deformation_graph').setLevel(logging.INFO)
 logging.getLogger('run_motion_model').setLevel(logging.INFO)
 

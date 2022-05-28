@@ -45,6 +45,8 @@ pip install pynput pycuda cupy pykdtree
 26. Check values deformed graph node poisitions using optical flow flow
 27. Add tests to measure deformation of nodes using OcclusionFusion Model 
 28. Add tests to see write values are getting passed to occlusion fusion and optimization
+29. Refactor motion_complete_model_test.py & optimization_tests.py, each test has only slight changes described in commnents. Create a class instead of functions, write each test seperately.   
+30. Merge vis_utils.py and vis_open3d.py
 # Tests: 
 ```
 python3 ./tests.sh // Run Tests to see if working perfectly

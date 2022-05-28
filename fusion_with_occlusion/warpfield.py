@@ -400,7 +400,7 @@ class WarpField:
         # Save data for occlusion fusion 
         np.save(os.path.join(self.savepath,"deformed_nodes",f"{self.frame_id}.npy"),self.deformed_nodes)
 
-        self.log.debug(f"Deformed Nodes:{self.deformed_nodes.shape}")
+        self.log.debug(f"Saving Deformed Nodes:{self.deformed_nodes.shape} at frame_id:{self.frame_id}")
 
     def get_transformation_wrt_graph_node(self):
         """
@@ -409,6 +409,8 @@ class WarpField:
             or Given R,t => T(4x4) = [[R,-Rg + g + T],[0,0,0,1]] 
         """    
         N = self.rotations.shape[0]
+
+        print(self.rotations.shape,self.translations.shape,self.graph.nodes.shape)
 
         rotations = self.rotations
         translations = self.translations - self.graph.nodes[:N]\
@@ -443,7 +445,14 @@ class WarpField:
         """
         dist, nearest_node = self.source_frame_kdtree.query(points, k=1)
         dist = dist.reshape(-1)
-        unreachable_verts = np.where(dist > self.node_coverage)[0]
+        
+        # Previously I setted it to 1*self.node_coverage but this is dependant on the voxel size resolution 
+        # If the voxel size is small enough then after some iterations the previously found added vertex (since its depth will get updated) 
+        # Goes outside the node coverage. It becomes an unreachable node and it causes a node to erroneously get added
+        unreachable_verts = np.where(dist > 2*self.node_coverage)[0]
+
+
+
         self.log.debug(f"Unreachable nodes:{unreachable_verts}")
         if len(unreachable_verts) == 0:
             return [] # Empty array 
@@ -452,7 +461,7 @@ class WarpField:
         # Sort vertices by their distance to graph 
         dist = dist[unreachable_verts]
         dist_arg_sort = np.argsort(dist)[::-1]
-        self.log.debug("Dist:")
+        self.log.debug(f"Dist:{dist}")
         self.log.debug(f"Sorted by their distance:{dist_arg_sort}")
         unreachable_verts = unreachable_verts[dist_arg_sort]
 
@@ -481,10 +490,23 @@ class WarpField:
 
 
         # Get vertices not skinned, sorted by their ditance from graph 
+
         new_verts_indices = self.find_unreachable_nodes(canonical_model_vertices[canonical_model_non_eroded_indices])
+        if len(new_verts_indices) == 0: return False 
+
+        # canonical_mesh_color = np.zeros(canonical_model_vertices.shape[0],dtype=np.int32)
+        # canonical_mesh_color[new_verts_indices] = 1
+        # canonical_rendered_mesh = self.vis.get_mesh(canonical_model_vertices,canonical_model_faces,color=canonical_mesh_color,normals=canonical_model[3])
+        # self.vis.plot([canonical_rendered_mesh],"New verts for graph",True)
         
         old_num_nodes = self.graph.nodes.shape[0]
         update = self.graph.update(canonical_model_vertices,canonical_model_faces,new_verts_indices) # Update graph and return whether succesfully updated or not 
+
+        # node_color = np.ones(self.graph.nodes.shape[0],dtype=np.int32)
+        # node_color[:old_num_nodes] = 0
+        # new_rendered_graph = self.vis.get_rendered_graph(self.graph.nodes,self.graph.edges,color=node_color)
+
+        # self.vis.plot(new_rendered_graph + [canonical_rendered_mesh],"Newly added nodes",True)
 
         if update:
             ##################################

@@ -64,6 +64,8 @@ class LinearSolverLU(torch.autograd.Function):
     @staticmethod
     def forward(ctx, A, b):
         A_LU, pivots = torch.lu(A)
+
+        # Check A_LU is equal to A
         x = torch.lu_solve(b, A_LU, pivots)
 
         ctx.save_for_backward(A_LU, pivots, x)
@@ -103,13 +105,13 @@ class DeformNet(torch.nn.Module):
 
         # Forces adjacent nodes to move rigidly, i.e is maintain distance between them irrecpective of transformations
         # If too low deformed nodes can move to random position and hence tsdf doesn't deform correctly 
-        self.gn_arap = 0.00
+        self.gn_arap = 0.5
 
         # Loss term for motion loss in OcclusionFusion
-        self.gn_motion = 0.0
+        self.gn_motion = 1
 
         # Limiting factor, 
-        self.gn_lm_factor = 1e-6
+        self.gn_lm_factor = 1e-7
 
         # Optimizer fails for > 3 iterations. Current hack is to stop update is loss increases by 1
         self.stop_loss_diff = 1
@@ -222,7 +224,9 @@ class DeformNet(torch.nn.Module):
         source_points_vec,anchors_vec, weights_vec, valid_verts, # Canonical model's vertices, skinning weights and verts validity
         intrinsics_vec, 
         target_points_vec,target_normals_vec,target_px_vec,target_py_vec, # Target location calulcated by optical flow  
-        prev_rot = None, prev_trans = None,evaluate=True, split="test"): # Rotations and translation estimated at previous timesteps as initialization
+        prev_rot = None, prev_trans = None,
+        gr_deformation=None, # Ground Truth position of vertices if available
+        evaluate=True, split="test",plot=False): # Rotations and translation estimated at previous timesteps as initialization
         """
            Based on OcclusionFusion, optimize to find results 
            TODO add description of each variable       
@@ -240,7 +244,13 @@ class DeformNet(torch.nn.Module):
                 "total": [],
                 "arap": [],
                 "data": [],
+                "3D": [],
+                "px": [],
+                "py": [],
+                "grad_rot": [],
+                "grad_trans": [],
                 "motion": [],
+                "pixel": [],
                 "condition_numbers": [],
                 "valid": 0,
                 "errors": []
@@ -317,6 +327,9 @@ class DeformNet(torch.nn.Module):
                 target_normals = target_normals[sampled_idxs]
                 target_px      = target_px[sampled_idxs]
                 target_py      = target_py[sampled_idxs]
+
+                if gr_deformation is not None:
+                    gr_deformation = gr_deformation[sampled_idxs]
 
                 num_matches = max_num_matches
         
@@ -441,10 +454,24 @@ class DeformNet(torch.nn.Module):
                 minus_fx_mul_x_div_z_2 = -fx_mul_x_div_z * deformed_z_inverse # (num_matches)
                 minus_fy_mul_y_div_z_2 = -fy_mul_y_div_z * deformed_z_inverse # (num_matches)
 
+                # print(fx_mul_x_div_z)
+                # print(fy_mul_y_div_z)
+                # print(minus_fx_mul_x_div_z_2)
+                # print(minus_fy_mul_y_div_z_2)
 
-                print("Difference:",torch.linalg.norm(deformed_points - target_points))    
-                print("Difference px:",torch.linalg.norm(fx_mul_x_div_z + cx - target_px.view(num_matches)))    
-                print("Difference px:",torch.linalg.norm(fy_mul_y_div_z + cy - target_py.view(num_matches)))    
+
+                # print("3D deformed:",deformed_points[::1000])
+                # if gr_deformation is not None:
+                #     print("Ground Truth:",gr_deformation[::1000])
+                # print("3D Target:", target_points[::1000])
+
+                # print("Deformed px:",fx_mul_x_div_z + cx)
+                # print("Target px:",target_px.view(num_matches))
+                # print("Difference px:",fx_mul_x_div_z + cx - target_px.view(num_matches))
+
+                # print("Deformed py:",fy_mul_y_div_z + cy)
+                # print("Target py:",target_py.view(num_matches))    
+                # print("Difference py:",fy_mul_y_div_z + cy - target_py.view(num_matches))
 
                 for k in range(4): # Our data uses 4 anchors for every point
                     node_idxs_k = anchors[:, k] # (num_matches)
@@ -457,10 +484,7 @@ class DeformNet(torch.nn.Module):
                     weighted_rotated_points_k = weights_k.view(num_matches, 1, 1).repeat(1, 3, 1) * rotated_points_k # (num_matches, 3, 1)
 
                     # print(rotated_points_k.shape)
-                    # print(weighted_rotated_points_k.shape)
                     skew_symetric_mat_data = -torch.matmul(self.vec_to_skew_mat, weighted_rotated_points_k).view(num_matches, 3, 3) # (num_matches, 3, 3)
-                    # print(self.vec_to_skew_mat.shape)
-                    # print(skew_symetric_mat_data.shape)
 
                     # Compute jacobian wrt. TRANSLATION.
                     # FLOW PART
@@ -472,7 +496,9 @@ class DeformNet(torch.nn.Module):
                     # DEPTH PART
                     jacobian_data[data_increment_vec_0_3, 3 * num_nodes_i + 3 * node_idxs_k + 0] += lambda_data_depth * weights_k # (num_matches)
                     jacobian_data[data_increment_vec_1_3, 3 * num_nodes_i + 3 * node_idxs_k + 1] += lambda_data_depth * weights_k # (num_matches)
+
                     jacobian_data[data_increment_vec_2_3, 3 * num_nodes_i + 3 * node_idxs_k + 2] += lambda_data_depth * weights_k # (num_matches)
+
 
                     # Compute jacobian wrt. ROTATION.
                     # FLOW PART
@@ -483,6 +509,14 @@ class DeformNet(torch.nn.Module):
                     jacobian_data[data_increment_vec_1_3, 3 * node_idxs_k + 1] += lambda_data_flow * fy_div_z * skew_symetric_mat_data[:, 1, 1] + minus_fy_mul_y_div_z_2 * skew_symetric_mat_data[:, 2, 1]
                     jacobian_data[data_increment_vec_1_3, 3 * node_idxs_k + 2] += lambda_data_flow * fy_div_z * skew_symetric_mat_data[:, 1, 2] + minus_fy_mul_y_div_z_2 * skew_symetric_mat_data[:, 2, 2]
                     
+                    # print(k)
+                    # print(jacobian_data[data_increment_vec_0_3[0], 3 * node_idxs_k[0] + 0])
+                    # print(jacobian_data[data_increment_vec_0_3[0], 3 * node_idxs_k[0] + 1])
+                    # print(jacobian_data[data_increment_vec_0_3[0], 3 * node_idxs_k[0] + 2])
+                    # print(jacobian_data[data_increment_vec_1_3[0], 3 * node_idxs_k[0] + 0])
+                    # print(jacobian_data[data_increment_vec_1_3[0], 3 * node_idxs_k[0] + 1])
+                    # print(jacobian_data[data_increment_vec_1_3[0], 3 * node_idxs_k[0] + 2])
+                    # print(node_idxs_k[0],3 * node_idxs_k[0],torch.where(jacobian_data[data_increment_vec_0_3[0]]!=0))
                     # DEPTH PART
                     jacobian_data[data_increment_vec_0_3, 3 * node_idxs_k + 0] += lambda_data_depth * skew_symetric_mat_data[:, 0, 0] 
                     jacobian_data[data_increment_vec_0_3, 3 * node_idxs_k + 1] += lambda_data_depth * skew_symetric_mat_data[:, 0, 1] 
@@ -505,9 +539,10 @@ class DeformNet(torch.nn.Module):
                 res_data[data_increment_vec_1_3, 0] = lambda_data_flow * (fy_mul_y_div_z + cy - target_py.view(num_matches))
                 
                 # DEPTH PART
-                res_data[data_increment_vec_0_3, 0] = lambda_data_depth * (deformed_points[:, 0, :] - target_points[:, 0, :]).view(num_matches)
-                res_data[data_increment_vec_1_3, 0] = lambda_data_depth * (deformed_points[:, 1, :] - target_points[:, 1, :]).view(num_matches)
-                res_data[data_increment_vec_2_3, 0] = lambda_data_depth * (deformed_points[:, 2, :] - target_points[:, 2, :]).view(num_matches)
+                res_data[data_increment_vec_0_3, 0] += lambda_data_depth * (deformed_points[:, 0, :] - target_points[:, 0, :]).view(num_matches)
+                res_data[data_increment_vec_1_3, 0] += lambda_data_depth * (deformed_points[:, 1, :] - target_points[:, 1, :]).view(num_matches)
+
+                res_data[data_increment_vec_2_3, 0] += lambda_data_depth * (deformed_points[:, 2, :] - target_points[:, 2, :]).view(num_matches)
 
 
                 if opt.gn_print_timings: print("\t\tData term: {:.3f} s".format(timer() - timer_data_start))
@@ -578,19 +613,25 @@ class DeformNet(torch.nn.Module):
 
                 if opt.gn_print_timings: print("\t\tARAP term: {:.3f} s".format(timer() - timer_arap_start))
 
+
                 ##########################################
                 # Solve linear system.
                 ##########################################
                 if num_edges_i > 0:
+                    print(jacobian_data.shape)
                     res = torch.cat((res_data, res_arap), 0)
                     jac = torch.cat((jacobian_data, jacobian_arap), 0)
+
                 else:
                     res = res_data
                     jac = jacobian_data
 
+                print(jac.shape)
 
                 res = torch.cat((res,res_motion),0)    
                 jac = torch.cat((jac,jacobian_motion),0)    
+
+                print(jac.shape)
 
 
 
@@ -668,9 +709,19 @@ class DeformNet(torch.nn.Module):
                     break
             
                 if opt.gn_print_timings: print("\t\tLinear solve: {:.3f} s".format(timer() - timer_solve_start))
-                    
+                
+
                 loss_data = torch.norm(res_data).item()
                 loss_total = torch.norm(res).item()
+
+
+                loss_3D = torch.sqrt(torch.mean((deformed_points - target_points)**2)).item()
+
+                loss_px = torch.sqrt(torch.mean((fx_mul_x_div_z + cx - target_px.view(num_matches))**2)).item()
+                loss_py = torch.sqrt(torch.mean((fy_mul_y_div_z + cy - target_py.view(num_matches))**2)).item()
+    
+                grad_trans = torch.sqrt(torch.mean(b[3 * num_nodes_i:].view(-1,3)**2)).item()
+                grad_rot = torch.sqrt(torch.mean(b[:3 * num_nodes_i].view(-1,3)**2)).item()
 
                 if len(convergence_info[i]["total"]): 
                     if loss_total - convergence_info[i]["total"][-1] > self.stop_loss_diff:
@@ -682,6 +733,12 @@ class DeformNet(torch.nn.Module):
 
                 convergence_info[i]["data"].append(loss_data)
                 convergence_info[i]["total"].append(loss_total)
+                convergence_info[i]["3D"].append(loss_3D)
+                convergence_info[i]["px"].append(loss_px)
+                convergence_info[i]["py"].append(loss_py)
+                convergence_info[i]["grad_trans"].append(grad_trans)
+                convergence_info[i]["grad_rot"].append(grad_rot)
+
 
                 # Increment the current rotation and translation.
                 R_inc = kornia.geometry.conversions.angle_axis_to_rotation_matrix(x[:num_nodes_i*3].view(num_nodes_i, 3))
@@ -703,12 +760,17 @@ class DeformNet(torch.nn.Module):
                 if opt.gn_debug:
                     if num_edges_i > 0:
                         print("\t-->Iteration: {0}. Lm:{1:.3f} Loss: \tdata = {2:.3f}, \tarap = {3:.3f}, motion = {4:.3f} \ttotal = {5:.3f}".format(gn_i, lm_factor,loss_data, loss_arap, loss_motion,loss_total))
+                        print("\t-->Iteration: {0}. 3D:{1:.3f} px:{2:.3f} \tpy = {3:.3f}".format(gn_i, loss_3D,loss_px,loss_py))
+                        print("\t-->Iteration: {0}. grad_rot:{1:.3f} grad_trans:{2:.3f}".format(gn_i, grad_rot,grad_trans))
                     else:
                         print("\t-->Iteration: {0}. Loss: \tdata = {1:.3f}, motion = {2:.3f}, \ttotal = {3:.3f}".format(gn_i, loss_data, loss_motion,loss_total))
+                        print("\t-->Iteration: {0}. 3D:{1:.3f} px:{2:.3f} \tpy = {3:.3f}".format(gn_i, loss_3D,loss_px,loss_py))
+                        print("\t-->Iteration: {0}. grad_rot:{1:.3f} grad_trans:{2:.3f}".format(gn_i, grad_rot,grad_trans))
 
                 
                 # Plot optimization changes 
-                # self.vis.plot_optimization(gn_i,deformed_points.cpu().data.numpy(),valid_verts,target_points.cpu().data.numpy())
+                if plot:
+                    self.vis.plot_optimization(gn_i,deformed_points.cpu().data.numpy(),valid_verts,target_points.cpu().data.numpy(),debug=True)
             ###############################################################################################################
             # Write the solutions.
             ###############################################################################################################

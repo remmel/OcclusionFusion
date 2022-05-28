@@ -74,13 +74,12 @@ class TestModel(Deformnet_runner):
 		cx = intrinsics[2]
 		cy = intrinsics[3]
 
+
 		source_points_px = source_points[:,0]*fx/source_points[:,2] + cx
 		source_points_py = source_points[:,1]*fy/source_points[:,2] + cy
 
 		target_points_px = target_points[:,0]*fx/target_points[:,2] + cx
 		target_points_py = target_points[:,1]*fy/target_points[:,2] + cy
-
-
 		# self.vis.plot_opticalflow(source_points_px,source_points_py,target_points_px,target_points_py,debug=True)
 
 		return valid_mask,target_points,target_points_normals,target_points_px,target_points_py
@@ -89,7 +88,7 @@ class TestModel(Deformnet_runner):
 def test1(use_gpu=True):
 	"""
 		Rotating and translating sphere.
-	"""  
+	"""  	
 
 	fopt = Dict2Class({"source_frame":0,\
 		"gpu":use_gpu,"visualizer":"open3d",\
@@ -176,7 +175,7 @@ def test1(use_gpu=True):
 
 	intrinsics = np.array([1,1,0,0],dtype=np.float32)
 
-	for target_frame_id in range(fopt.skip_rate,T-1,fopt.skip_rate):
+	for target_frame_id in range(fopt.source_frame,T-1,fopt.skip_rate):
 		
 		print(f"Frame id:{target_frame_id}")
 		# Optical flow data not required, returned by tsdf for the test
@@ -233,9 +232,28 @@ def test1(use_gpu=True):
 		deformed_graph = vis.get_rendered_deformed_graph(trans=np.array([1,0,0])*bbox)
 
 		target_graph = vis.get_rendered_graph(target_graph_nodes,graph.edges,trans=np.array([2,0,0])*bbox) # Actualy position 
+
+		deformed_model = vis.get_deformed_model_from_tsdf(trans=np.array([1,0,0])*bbox)
+
 		vis.plot(init_graph + deformed_graph + target_graph,"Deformed Graph",False)		
 
 
+def transform_matrix2rotation_translation(relative_transform_matrix): 
+	T,N = relative_transform_matrix.shape
+	T //=4
+	N //= 4
+
+	rotations = np.zeros((T,N,3,3),dtype=np.float32)
+	translations = np.zeros((T,N,3),dtype=np.float32)
+
+	for t in range(T):
+		for n in range(N):
+			for i in range(3):
+				for j in range(3):
+					rotations[t,n,i,j] = relative_transform_matrix[4*t+i,4*n+j]
+				translations[t,n,i] = relative_transform_matrix[4*t+i,4*n+3]
+
+	return rotations,translations
 
 def test2(use_gpu=True):
 	"""
@@ -250,6 +268,7 @@ def test2(use_gpu=True):
 	ssdr = SSDR()
 	filname = fopt.datadir.split("/")[-1] + '.anime'
 	trajectory,faces = ssdr.load_anime_file(os.path.join(fopt.datadir,filname))
+
 
 	mesh = o3d.geometry.TriangleMesh(
 			o3d.utility.Vector3dVector(trajectory[0]),
@@ -274,7 +293,7 @@ def test2(use_gpu=True):
 	graph = EDGraph(tsdf,vis)
 	warpfield = WarpField(graph,tsdf,vis)
 	model = TestModel(vis,fopt)	
-
+	# model.model.gn_num_iter = 1
 	# Add modules to vis
 	vis.tsdf = tsdf
 	vis.graph = graph
@@ -289,24 +308,26 @@ def test2(use_gpu=True):
 	tsdf.reduced_graph_dict = {"valid_nodes_mask":np.ones(graph.nodes.shape[0],dtype=np.bool)}
 
 	deformed_vertices,deformed_normals,vert_anchors,vert_weights,valid_verts = warpfield.deform_mesh(trajectory[0],trajectory_normals[0])
-	relative_transform_matrix,rmse_error = ssdr.get_transforms(trajectory,faces,vert_anchors,vert_weights,graph.nodes)
-	
-	print("Relative Transforms:",relative_transform_matrix)
+	gr_deformation,relative_transform_matrix,rmse_error = ssdr.get_transforms(trajectory,faces,vert_anchors,vert_weights,graph.nodes)
+	gr_rotations, gr_translations = transform_matrix2rotation_translation(relative_transform_matrix)
+	# print("Relative Transforms:",relative_transform_matrix)
 	print("Rsme Error:",rmse_error)
+	# print("Gr Rotations:",gr_rotations[:,0])
+	print("Gr Translations:",gr_translations[:,0])
 
 
 
 	T = tsdf.trajectory.shape[0]
 
-	intrinsics = np.array([1,1,0,0],dtype=np.float32)
+	intrinsics = np.array([500,500,250,250],dtype=np.float32)
 
-	for target_frame_id in range(fopt.skip_rate,T-1,fopt.skip_rate):
+	for target_frame_id in range(fopt.source_frame+fopt.skip_rate,T-1,fopt.skip_rate):
 		
 		print(f"Frame id:{target_frame_id}")
 		# Optical flow data not required, returned by tsdf for the test
 		optical_flow_data = {"source_id":target_frame_id - fopt.skip_rate,"target_id":target_frame_id}
 
-		# Get deformed graph positions  
+		# # Get deformed graph positions  
 		source_vertices = tsdf.trajectory[target_frame_id - fopt.skip_rate]
 		source_graph_nodes = source_vertices[graph.node_indices]
 		
@@ -315,12 +336,19 @@ def test2(use_gpu=True):
 
 		node_motion_data = target_graph_nodes - source_graph_nodes, np.ones(graph.nodes.shape[0],dtype=np.float32)
 
-		estimated_transformations = model.optimize(optical_flow_data,node_motion_data,intrinsics,None)
+		# Setting gr as input to optimization to create baseline 
+		# warpfield.rotations = gr_rotations[target_frame_id]
+		# warpfield.translations = gr_translations[target_frame_id]
+		# warpfield.deformed_nodes = np.array([gr_rotations[target_frame_id,i]@graph.nodes[i] for i in range(graph.num_nodes)]) + gr_translations[target_frame_id]
+		# warpfield.frame_id = optical_flow_data["source_id"]
 
+		scene_flow_data = {'source':source_vertices,'scene_flow': target_vertices - source_vertices ,"valid_verts":np.ones(target_vertices.shape[0],dtype=np.bool),"target_matches":target_vertices}	
+
+
+		estimated_transformations = model.optimize(optical_flow_data,node_motion_data,scene_flow_data,intrinsics,None,gr_deformation=gr_deformation[target_frame_id])
 
 		# Update warpfield parameters, warpfield maps to target frame  
 		warpfield.update_transformations(estimated_transformations)
-
 		# TSDF gets updated last
 		tsdf.frame_id = target_frame_id		
 
@@ -329,6 +357,7 @@ def test2(use_gpu=True):
 		rec_err_per_sample = np.linalg.norm(warpfield.deformed_nodes - target_vertices[graph.node_indices],axis=1)
 		print("Reconstructon Error:",np.mean(rec_err_per_sample))
 
+		print("Original Error:",np.mean(np.linalg.norm(gr_deformation[target_frame_id,graph.node_indices] - target_vertices[graph.node_indices],axis=1)))
 		# high_error_visible_nodes = np.where(rec_err_per_sample > 1e-3)[0]
 		# print("Problembatic Nodes:",high_error_visible_nodes)
 
@@ -357,4 +386,5 @@ def test2(use_gpu=True):
 		deformed_graph = vis.get_rendered_deformed_graph(trans=np.array([1,0,0])*bbox)
 
 		target_graph = vis.get_rendered_graph(target_graph_nodes,graph.edges,trans=np.array([2,0,0])*bbox) # Actualy position 
-		vis.plot(init_graph + deformed_graph + target_graph,"Deformed Graph",target_frame_id > 50)		
+		image_name = f"optimization_test2_ssdr_{target_frame_id:02d}.png"
+		vis.plot(init_graph + deformed_graph + target_graph,"Deformed Graph",False,savename=image_name)		

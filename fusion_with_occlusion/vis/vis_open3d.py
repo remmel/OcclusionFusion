@@ -23,7 +23,6 @@ class VisualizeOpen3D(Visualizer):
 			self.camera_params = o3d.io.read_pinhole_camera_parameters(\
 				os.path.join(self.savepath,"camera_params.json"))
 		
-
 	######################################
 	# Helper modules 					 #	
 	######################################	
@@ -42,18 +41,19 @@ class VisualizeOpen3D(Visualizer):
 		print(f"::{title} Debug:{debug}")	
 		if debug: 
 			self.vis_debug = o3d.visualization.Visualizer()
-			self.vis_debug.create_window(width=1280, height=960,window_name="Fusion Pipeline")
+			self.vis_debug.create_window(width=1280, height=1280,window_name="Fusion Pipeline")
 			
 			for o in object_list:
 				self.vis_debug.add_geometry(o)
 
 			
 			ctr = self.vis_debug.get_view_control()
+
 			# ctr.set_up([0,1,0])
 			# ctr.set_lookat([0,0,0])	
 			if hasattr(self,"camera_params"):	
 				ctr.convert_from_pinhole_camera_parameters(self.camera_params)	
-
+			# ctr.set_zoom(0.3)
 			self.vis_debug.run() # Plot and halt the program
 			self.vis_debug.destroy_window()
 			self.vis_debug.close()
@@ -64,14 +64,16 @@ class VisualizeOpen3D(Visualizer):
 			else:	
 				# Create visualization object
 				self.vis = o3d.visualization.Visualizer()
-				self.vis.create_window(width=1280, height=960,window_name="Fusion Pipeline")
+				self.vis.create_window(width=1280, height=1280,window_name="Fusion Pipeline")
 
 			for o in object_list:
 				self.vis.add_geometry(o)
 
 			ctr = self.vis.get_view_control()
 			# ctr.set_up([0,1,0])
-			# ctr.set_lookat([0,0,0])	
+			# ctr.set_lookat([0,0,0])
+			# ctr.set_zoom(0.3)
+
 			if hasattr(self,"camera_params"):	
 				ctr.convert_from_pinhole_camera_parameters(self.camera_params)	
 
@@ -81,8 +83,8 @@ class VisualizeOpen3D(Visualizer):
 			if savename is not None: # Save images only when not debugging
 				self.vis.capture_screen_image(os.path.join(self.savepath,"images",savename)) # TODO: Returns segfault
 
-	@staticmethod		
-	def get_mesh(verts,faces,trans=np.zeros((3,1)),color=None,normals=None):
+	
+	def get_mesh(self,verts,faces,trans=np.zeros((3,1)),color=None,normals=None):
 		"""
 			Create Open3D Mesh  
 		"""		
@@ -105,6 +107,9 @@ class VisualizeOpen3D(Visualizer):
 		"""
 		assert hasattr(self,'tsdf'),  "TSDF not defined. Add tsdf as attribute to visualizer first." 
 		verts, faces, normals, color = self.tsdf.get_mesh()  # Extract the new canonical pose using marching cubes
+		
+		print("Canonical Model vertices:",verts.shape)
+
 		return self.get_mesh(verts,faces,trans=trans,color=color,normals=normals)	
 
 	def get_deformed_model_from_tsdf(self,trans=np.zeros((3,1))):
@@ -253,31 +258,37 @@ class VisualizeOpen3D(Visualizer):
 		rendered_graph_nodes,rendered_graph_edges = self.get_rendered_graph(self.graph.nodes,self.graph.edges)
 		self.plot([canonical_mesh,rendered_graph_nodes,rendered_graph_edges],title,debug)
 	
-	def plot_correspondence(self,target_matches,valid_correspondences,target_image_data,debug=True):
+	def plot_correspondence(self,target_matches,valid_correspondences,target_image_data,debug=True,savename=None):
 
 		# print(target_matches)
-		target_matches = viz_utils.transform_pointcloud_to_opengl_coords(target_matches)
 		deformed_model = self.get_model_from_tsdf()
+		target_matches = viz_utils.transform_pointcloud_to_opengl_coords(target_matches)
 		
 		
 		source_points = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(deformed_model.vertices)))
 
 		corresp_weights = np.ones(target_matches.shape[0])
 
+
 		good_matches_set, good_weighted_matches_set = viz_utils.create_matches_lines(valid_correspondences , np.array([0.0, 0.8, 0]),
 																					 np.array([0.8, 0, 0.0]),
 																					 source_points, target_matches,
 																					 corresp_weights, 0.3,
 																					 1.)	
+
+
+		if savename is not None:
+			savename = os.path.join(self.savepath,"images",savename)
+
 		if target_image_data is not None:
 			target_pcd = viz_utils.get_pcd(target_image_data["im"]) # Get point cloud with max 10000 points
 		
-			self.plot([deformed_model,target_pcd,good_matches_set],title="Deformed Model Correspondences",debug=debug)	
+			self.plot([deformed_model,target_pcd,good_matches_set],title="Deformed Model Correspondences",debug=debug,savename=savename)	
 		else:
-			self.plot([deformed_model,good_matches_set],title="Deformed Model Correspondences",debug=debug)	
+			self.plot([deformed_model,good_matches_set],title="Deformed Model Correspondences",debug=debug,savename=savename)	
 
 	
-	def plot_optimization(self,n_iter,deformed_points,valid_verts,target_points):
+	def plot_optimization(self,n_iter,deformed_points,valid_verts,target_points,debug=True):
 		"""
 			Plot registration during optimization 
 		"""
@@ -304,7 +315,10 @@ class VisualizeOpen3D(Visualizer):
 																					 1.)
 
 
-		self.plot([deformed_model,good_matches_set],f"Iteration:{n_iter}",debug=False)
+		target_pcd = o3d.geometry.PointCloud()
+		target_pcd.points = o3d.utility.Vector3dVector(target_matches)
+
+		self.plot([deformed_model,good_matches_set,target_pcd],f"Iteration:{n_iter}",debug=debug)
 
 	def plot_opticalflow(self,source_px,source_py, target_px,target_py,trans=np.zeros((3,1)),debug=False):
 	
@@ -450,7 +464,7 @@ class VisualizeOpen3D(Visualizer):
 		)
 		manager.custom_draw_geometry_with_key_callback()		
 
-	def show(self,source_frame,matches=None,debug=True):
+	def show(self,scene_flow_data,source_frame,matches=None,debug=True):
 		"""
 			For visualizing the tsdf integration: 
 			1. Source RGBD + Graph(visible nodes)   2. Target RGBD as Point Cloud 
@@ -458,8 +472,12 @@ class VisualizeOpen3D(Visualizer):
 		"""
 
 		# Top left
-		source_pcd = self.get_source_RGBD()
+		# source_pcd = self.get_source_RGBD()
+		source_pcd = o3d.geometry.PointCloud()
+		source_pcd.points = o3d.utility.Vector3dVector(viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source']))
+		source_pcd.colors = o3d.utility.Vector3dVector(np.array([[0/255, 255/255, 0/255] for i in range(len(scene_flow_data['source']))]))
 
+	
 		# Create bounding box for later use 
 		if not hasattr(self,'bbox'):
 			self.bbox = (source_pcd.get_max_bound() - source_pcd.get_min_bound())
@@ -469,13 +487,31 @@ class VisualizeOpen3D(Visualizer):
 
 		# Top right 
 		target_pcd = self.get_target_RGBD(trans=np.array([1.0, 0, 0]) * bbox)
-		# rendered_deformed_nodes,rendered_deformed_edges = self.get_rendered_graph(self.warpfield.get_deformed_nodes(),self.graph.edges,color=color,trans=np.array([1.0, 0.0, 0.01]) * bbox)
+
+		scene_flow = scene_flow_data['scene_flow'] 
+		scene_flow[:,0] += bbox[0]
+
+		n_match_matches = scene_flow_data['source'][scene_flow_data['valid_verts']].shape[0]
+		match_matches_points = np.concatenate([viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]), viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]+scene_flow[scene_flow_data['valid_verts']])], axis=0)
+		match_matches_lines = [[i, i + n_match_matches] for i in range(0, n_match_matches, 1)]
+
+		# --> Create match (unweighted) lines 
+		match_matches_colors = [[201/255, 177/255, 14/255] for i in range(len(match_matches_lines))]
+		match_matches_set = o3d.geometry.LineSet(
+			points=o3d.utility.Vector3dVector(match_matches_points),
+			lines=o3d.utility.Vector2iVector(match_matches_lines),
+		)
+		match_matches_set.colors = o3d.utility.Vector3dVector(match_matches_colors)
+
+
+
+		color = np.load(os.path.join(self.savepath,"visible_nodes",f"{source_frame}.npy"))
+		rendered_deformed_nodes,rendered_deformed_edges = self.get_rendered_graph(self.warpfield.get_deformed_nodes(),self.graph.edges,color=color,trans=np.array([0.0, -1.0, 0.00]) * bbox)
 
 
 		# Bottom left
 		canonical_mesh = self.get_model_from_tsdf(trans=np.array([0, -1.0, 0]) * bbox)
-		color = np.load(os.path.join(self.savepath,"visible_nodes",f"{source_frame}.npy"))
-		rendered_graph_nodes,rendered_graph_edges = self.get_rendered_graph(self.graph.nodes,self.graph.edges,color=color,trans=np.array([0, -1.0, 0.01]) * bbox)
+		# rendered_graph_nodes,rendered_graph_edges = self.get_rendered_graph(self.graph.nodes,self.graph.edges,color=color,trans=np.array([0, -1.0, 0.01]) * bbox)
 
 		# Bottom right
 		deformed_mesh = self.get_deformed_model_from_tsdf(trans=np.array([1.0, -1.0, 0]) * bbox)
@@ -491,10 +527,26 @@ class VisualizeOpen3D(Visualizer):
 			# vis.add_geometry(matches[0])
 			# vis.add_geometry(matches[1])
 
+
+
 		self.plot([source_pcd,
 			target_pcd,
-			canonical_mesh,rendered_graph_nodes,rendered_graph_edges,
+			match_matches_set,
+			rendered_deformed_nodes,rendered_deformed_edges,
+			# canonical_mesh,rendered_graph_nodes,rendered_graph_edges,
 			deformed_mesh],"Showing frame",debug)
 
+
+
 		image_path = os.path.join(self.savepath,"images",f"{self.tsdf.frame_id}.png")
-		self.vis.capture_screen_image(image_path) # TODO: Returns segfault
+		if debug:
+			self.vis_debug.capture_screen_image(image_path) # TODO: Returns segfault
+		else:
+			self.vis.capture_screen_image(image_path) # TODO: Returns segfault
+
+		# Save results 
+		canonical_mesh.translate(np.array([0.0, 1.0, 0]) * bbox)
+		o3d.io.write_triangle_mesh(os.path.join(self.savepath,f"canonical_model/{self.tsdf.frame_id}.ply"),canonical_mesh) 
+
+		deformed_mesh.translate(np.array([-1.0, 1.0, 0]) * bbox)
+		o3d.io.write_triangle_mesh(os.path.join(self.savepath,f"deformed_model/{self.tsdf.frame_id}.ply"),deformed_mesh) 

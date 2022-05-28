@@ -45,11 +45,40 @@ class SSDR(pyssdr.MyDemBones):
                 assert val == skinning_weights[col,anchor], f"W[{row,col}] = {val} != {skinning_weights[col,anchor]}"
 
         return True
+    
+    def plot_reconstruction(self,deformed_vertices,target_vertices,faces):
+        import open3d as o3d
+        vis = o3d.visualization.Visualizer()
+        vis.create_window(width=1280, height=960,window_name="Fusion Pipeline")
 
+        for t in range(deformed_vertices.shape[0]):
+            if t == 0:
 
+                deformed_mesh = o3d.geometry.TriangleMesh(
+                    o3d.utility.Vector3dVector(deformed_vertices[t]),
+                    o3d.utility.Vector3iVector(faces))
+
+                vis.add_geometry(deformed_mesh)
+
+                # target_mesh = o3d.geometry.TriangleMesh(
+                #     o3d.utility.Vector3dVector(target_vertices[t]),
+                #     o3d.utility.Vector3iVector(faces))
+                # vis.add_geometry(target_mesh)
+            else: 
+                deformed_mesh.vertices = o3d.utility.Vector3dVector(np.asarray(deformed_vertices[t]))
+                vis.update_geometry(deformed_mesh)
+                # target_mesh.vertices = o3d.utility.Vector3dVector(np.asarray(target_vertices[t]))
+                # vis.update_geometry(target_mesh)
+
+            time.sleep(1)
+
+            vis.poll_events()
+            vis.update_renderer()
+
+        
     def get_transforms(self,trajectory,faces,skinning_anchors,skinning_weights,graph_nodes):
 
-
+        movement = trajectory.copy()
         # Preprocess trajectory to pass as input
         U = trajectory[0]
         trajectory = trajectory.transpose((0,2,1))
@@ -92,5 +121,13 @@ class SSDR(pyssdr.MyDemBones):
 
         self.computeTranformations()
 
+        deformed_vertices_ssdr = self.compute_reconstruction(list(range(N)))
+        deformed_vertices = np.zeros((T,N,3))
+        deformed_vertices[:,:,0] = deformed_vertices_ssdr[list(range(0,3*T,3))]
+        deformed_vertices[:,:,1] = deformed_vertices_ssdr[list(range(1,3*T,3))]
+        deformed_vertices[:,:,2] = deformed_vertices_ssdr[list(range(2,3*T,3))]
 
-        return self.m,self.rmse()            
+        # self.plot_reconstruction(deformed_vertices,movement,faces)
+
+
+        return deformed_vertices,self.m,self.rmse()            

@@ -53,6 +53,8 @@ class TSDFVolume:
         self.cam_intr[0, 2] = cam_intr[2]
         self.cam_intr[1, 2] = cam_intr[3]
 
+        # print("Camera intr at tsdf:",self.cam_intr)
+
         # Save fusion hyperparameters for future use
         self.fopt = fopt
         self.vis  = visualizer
@@ -326,6 +328,8 @@ class TSDFVolume:
 
         # Update image information in TSDF class, need to be stored for future applications  
         self.update(image_data["im"],image_data["id"]) # Now tsdf maps to the target frame 
+        
+
         cam_pose = np.eye(4)  # TODO For future if we want to integrate varying camera pose too
 
         # Deform 
@@ -340,7 +344,8 @@ class TSDFVolume:
         # Begin integration 
         im_h, im_w = self.depth_im.shape
         if self.gpu_mode:  # GPU mode: integrate voxel volume (calls CUDA kernel)
-
+            if self.frame_id > self.fopt.source_frame: 
+                return 
             cam_pts = cam_pts.reshape(-1,3)
             valid_points 
             pycuda_ctx.push()
@@ -746,5 +751,5 @@ class TSDFVolume:
         if hasattr(self,"deformed_model"):
             del self.deformed_model
             
-        if hasattr(self,"deformed_model"):        
+        if hasattr(self,"canonical_model"):        
             del self.canonical_model

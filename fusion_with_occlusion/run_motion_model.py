@@ -75,12 +75,14 @@ class MotionCompleteNet_Runner:
         # for the first frame, set historical motion
         # using node position change between consequent frames as historical motion
         if self.frame_id > self.fopt.source_frame:
-            node_pos_prev = np.load(os.path.join(self.savepath,"deformed_nodes", f'{self.frame_id - self.fopt.skip_rate}.npy'))
+            node_pos_prev = np.load(os.path.join(self.savepath,"deformed_nodes", f'{self.frame_id}.npy'))
             visible_prev = np.load(os.path.join(self.savepath,"visible_nodes", f'{self.frame_id - self.fopt.skip_rate}.npy'))
             prev_node_num = node_pos_prev.shape[0]
 
             # node num of current frame could be larger than the previous frame, and new nodes will be add to the end of the node array
             node_motion_prev = node_pos[:node_pos_prev.shape[0]] - node_pos_prev
+
+            print(f"Prev Frame id:{self.frame_id - self.fopt.skip_rate}",node_motion_prev.shape,visible_prev.shape)
 
             rigid_R, rigid_t = self.rigid_icp(node_pos_prev[visible_prev, :], node_pos_prev[visible_prev, :] + node_motion_prev[visible_prev, :])
             rigid_motion_prev = np.dot(node_pos_prev, rigid_R.transpose()) + rigid_t - node_pos_prev

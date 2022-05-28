@@ -8,15 +8,18 @@ import logging # To log info
 
 sys.path.append("../")  # Making it easier to load modules
 
+import utils.viz_utils as viz_utils
+import numpy as np
+
 # Fusion Modules 
 from frame_loader import RGBDVideoLoader
 from tsdf import TSDFVolume # Create main TSDF module where the 3D volume is stored
 from embedded_deformation_graph import EDGraph # Create ED graph from mesh, depth image, tsdf 
 from vis import get_visualizer # Visualizer 
 from run_model import Deformnet_runner # Neural Tracking Moudle 
+from run_lepard import Lepard_runner # SceneFlow module 
 from run_motion_model import MotionCompleteNet_Runner
 from warpfield import WarpField # Connects ED Graph and TSDF/Mesh/Whatever needs to be deformed  
-
 
 
 
@@ -34,6 +37,7 @@ class DynamicFusion:
 
 		self.model = Deformnet_runner(self.vis,opt)
 		self.motion_complete_model = MotionCompleteNet_Runner(opt)	
+		self.scene_flow_model = Lepard_runner(self.vis,opt)
 
 		self.model.vis = self.vis
 
@@ -51,6 +55,8 @@ class DynamicFusion:
 		# Add TSDF to visualizer
 		self.vis.tsdf = self.tsdf
 		self.model.tsdf = self.tsdf
+		self.scene_flow_model.tsdf = self.tsdf
+
 
 		# Integrate source frame 
 		assert "mask" in source_data, "Source frame must contain segmented object for graph generation"
@@ -85,6 +91,8 @@ class DynamicFusion:
 
 		self.warpfield.model = self.model
 
+		self.bbox = None
+
 	def register_new_frame(self): 
 
 		# Check next frame can be registered
@@ -112,9 +120,14 @@ class DynamicFusion:
 		"""
 
 		source_frame_data = self.frameloader.get_source_data(source_frame)	
+
+		print(source_frame_data["intrinsics"])
+
 		target_frame_data = self.frameloader.get_target_data(target_frame,source_frame_data["cropper"])	
 		# find target location of visible nodes
 		optical_flow_data = self.model.estimate_optical_flow(source_frame_data,target_frame_data)
+
+		scene_flow_data = self.scene_flow_model(target_frame_data)
 
 		# Get visible nodes 
 		deformed_nodes_at_source = self.warpfield.get_deformed_nodes()
@@ -128,8 +141,21 @@ class DynamicFusion:
 			deformed_visible_nodes_predicted_location,
 			updated_visible_nodes_mask)
 
+		# deformed_graph = self.vis.get_rendered_graph(self.warpfield.get_deformed_nodes() + estimated_complete_nodes_motion_data[0],self.graph.edges,color=updated_visible_nodes_mask)
+		
+		# target_pcd = viz_utils.get_pcd(target_frame_data["im"])
+		# if self.bbox is None:
+			# self.bbox = (target_pcd.get_max_bound() - target_pcd.get_min_bound())
+		# target_pcd.translate(np.array([1.0, 0, 0]) * self.bbox)
+
+		# image_name = f"donkeydoll_deformed_graph_{target_frame:03d}.png"
+		# if target_frame % 2 == 0:
+		# 	self.vis.plot(deformed_graph + [target_pcd],"Deformed Graph",True,savename=image_name)
+
 		# Compute optical flow and estimate transformation for graph using neural tracking
-		estimated_transformations = self.model.optimize(optical_flow_data,estimated_complete_nodes_motion_data,source_frame_data["intrinsics"],target_frame_data)
+		estimated_transformations = self.model.optimize(optical_flow_data,
+			estimated_complete_nodes_motion_data,
+			scene_flow_data,source_frame_data["intrinsics"],target_frame_data)
 
 		# Update warpfield parameters, warpfield maps to target frame  
 		self.warpfield.update_transformations(estimated_transformations)
@@ -143,7 +169,8 @@ class DynamicFusion:
 		# update = self.warpfield.update_graph() 
 		update = False
 		
-		self.vis.show(source_frame,debug=False) # plot registration details 
+		# if source_frame > 0:		
+		# self.vis.show(scene_flow_data,source_frame,debug=True) # plot registration details 
 
 
 		# Return whether sucess or failed in registering 
@@ -211,3 +238,4 @@ if __name__ == "__main__":
 
 	dfusion = DynamicFusion(opt)
 	dfusion()
+	# dfusion.vis.plot_convergance_info()

@@ -1,6 +1,7 @@
 # The code in the this file creates a class to run deformnet using torch
 import os
 import sys
+import json
 import torch
 import numpy as np
 import logging
@@ -124,6 +125,8 @@ class Deformnet_runner():
 		target_matches_validity = optical_flow_data["target_matches_validity"]	
 		target_pixels = optical_flow_data["xy_coords_warped"]
 
+		# print("intrinsics:",intrinsics)
+
 		fx = intrinsics[0]
 		fy = intrinsics[1]
 		cx = intrinsics[2]
@@ -131,24 +134,73 @@ class Deformnet_runner():
 
 		px = points[:,0]*fx/points[:,2] + cx
 		py = points[:,1]*fy/points[:,2] + cy
+		# self.log.debug(f"Image Shape:{target_matches.shape} px:{px} py:{py}")
 
-		# TODO: No interpolation currently, add interpolation for pixels 
+		# TODO: No interpolation currently, add interpolation for pixels
 
-		px = px.astype(np.int32)
-		py = py.astype(np.int32)
+		px_int = px.astype(np.int32)
+		py_int = py.astype(np.int32)
 
-		self.log.debug(f"Image Shape:{target_matches.shape} px:{px} py:{py} ")
+		px_diff = torch.from_numpy(px - px_int).cuda()
+		py_diff = torch.from_numpy(py - py_int).cuda()
 
-		assert np.all(px<target_matches.shape[3]) and np.all(py<target_matches.shape[2]), "px or py out of image dimensions"
+		# self.log.debug(f"Diff x:{px_diff} y:{py_diff}")
+		valid_mask[px_int >= target_matches.shape[3]-1 ] = False
+		valid_mask[py_int >= target_matches.shape[2]-1 ] = False
 
-		points_target_location = target_matches[0,:,py,px].permute(1,0).cpu().data.numpy()
-		points_target_normals = target_normals[0,:,py,px].permute(1,0).cpu().data.numpy() 
-		points_target_validity = target_matches_validity[0,py,px].cpu().data.numpy()
-		points_target_pixels = target_pixels[0,:,py,px].permute(1,0).cpu().data.numpy()
+		px_int[px_int >= target_matches.shape[3]-1] = 0
+		py_int[py_int >= target_matches.shape[2]-1] = 0
+
+
+		# try:
+		# 	print(target_matches[0,:,py_int,px_int])
+		# 	print(target_matches[0,:,py_int+1,px_int])
+		# 	print(target_matches[0,:,py_int,px_int+1])
+		# 	print(target_matches[0,:,py_int+1,px_int+1])
+		# except: 
+		# 	print(target_matches.shape)
+		# 	print(px_int[ px_int+1 > target_matches.shape[3]])
+		# 	print(py_int[ py_int+1 > target_matches.shape[2]])
+		
+		assert np.all(px_int+1 < target_matches.shape[3]) and np.all(py_int+1 < target_matches.shape[2]), "px or py out of image dimensions"
+
+		points_target_location = ((1 - px_diff)*(1 - py_diff)).view(1,-1)*target_matches[0,:,py_int,px_int]\
+							+ (px_diff*(1 - py_diff)).view(1,-1)*target_matches[0,:,py_int,px_int+1]\
+							+ ((1 - px_diff)*py_diff).view(1,-1)*target_matches[0,:,py_int+1,px_int]\
+							+ (px_diff*py_diff).view(1,-1)*target_matches[0,:,py_int+1,px_int+1]
+		points_target_location = points_target_location.permute(1,0).cpu().data.numpy()
+
+		# self.log.debug(f"Point Target Location:{points_target_location} {target_matches[0,:,py,px].permute(1,0).cpu().data.numpy()}")
+
+		points_target_normals = ((1 - px_diff)*(1 - py_diff)).view(1,-1)*target_normals[0,:,py_int,px_int]\
+							+ (px_diff*(1 - py_diff)).view(1,-1)*target_normals[0,:,py_int,px_int+1]\
+							+ ((1 - px_diff)*py_diff).view(1,-1)*target_normals[0,:,py_int+1,px_int]\
+							+ (px_diff*py_diff).view(1,-1)*target_normals[0,:,py_int+1,px_int+1]
+		points_target_normals = points_target_normals.permute(1,0).cpu().data.numpy()
+
+		# self.log.debug(f"Point Target Normals:{points_target_normals} {target_normals[0,:,py,px].permute(1,0).cpu().data.numpy()}")
+
+		points_target_validity = target_matches_validity[0,py_int,px_int]\
+							& target_matches_validity[0,py_int,px_int+1]\
+							& target_matches_validity[0,py_int+1,px_int]\
+							& target_matches_validity[0,py_int+1,px_int+1]
+		points_target_validity = points_target_validity.cpu().data.numpy()
+
+		# self.log.debug(f"Point Target Validity:{points_target_validity} {target_matches_validity[0,py,px].cpu().data.numpy()}")
+
+		points_target_pixels = ((1 - px_diff)*(1 - py_diff)).view(1,-1)*target_pixels[0,:,py_int,px_int]\
+							+ (px_diff*(1 - py_diff)).view(1,-1)*target_pixels[0,:,py_int,px_int+1]\
+							+ ((1 - px_diff)*py_diff).view(1,-1)*target_pixels[0,:,py_int+1,px_int]\
+							+ (px_diff*py_diff).view(1,-1)*target_pixels[0,:,py_int+1,px_int+1]
+		points_target_pixels = points_target_pixels.permute(1,0).cpu().data.numpy()
+
+		# self.log.debug(f"Point Target pixels:{points_target_pixels} {target_pixels[0,:,py,px].permute(1,0).cpu().data.numpy()}")
+
+
+
+
 
 		valid_mask = valid_mask & points_target_validity
-
-
 		target_points = points.copy()	
 		target_points[valid_mask] = points_target_location[valid_mask]
 
@@ -164,30 +216,50 @@ class Deformnet_runner():
 
 		return valid_mask,target_points,target_points_normals,target_points_px,target_points_py
 
-	def optimize(self,optical_flow_data,node_motion_data,intrinsics,target_frame_data):
+	def optimize(self,
+		optical_flow_data,
+		node_motion_data,scene_flow_data,
+		intrinsics,
+		target_frame_data,gr_deformation=None):
 		"""
-			Create input for optimization for Occlusion fusion 
+			Create input for optimization for Occlusion fusion
+
+			gr_deformation = Ground truth defomration predicted by SSDR 
 		"""
 		
 		# Get canonical model 
 		vertices,faces,normals,colors = self.tsdf.get_canonical_model()
 
+		# print(vertices.shape)
+
 		deformed_vertices,deformed_normals,vert_anchors,vert_weights,valid_verts = self.warpfield.deform_mesh(vertices,normals)
-		self.log.debug(f"Deformed Vertices:{np.sum(valid_verts)}")
+		# self.log.debug(f"Deformed Vertices:{np.sum(valid_verts)}/{valid_verts.shape}")
+
+		# print(len(np.unique(vert_anchors)),self.graph.nodes.shape[0])
+		# assert len(np.unique(vert_anchors)) == self.graph.nodes.shape[0]
+
 
 		# Check their visibility and update visible nodes
 		visible_verts, depth_diff = self.tsdf.check_visibility(deformed_vertices[valid_verts])	
 		valid_verts[valid_verts] = visible_verts
 
-		self.log.debug(f"Visible Skinned Vertices:{np.sum(valid_verts)}")
+		# self.log.debug(f"Visible Skinned Vertices:{np.sum(valid_verts)}/{valid_verts.shape}")
 
 
 		valid_verts,target_points,target_points_normals,target_points_px,target_points_py = self.get_predicted_location(optical_flow_data,vertices,valid_verts,intrinsics)
 
-		self.log.debug(f"Valid Visible Skinned Vertices:{np.sum(valid_verts)}")
+		# TODO!!!! Replacing optical flow data with scene flow
+		valid_verts,target_points = scene_flow_data["valid_verts"],scene_flow_data["target_matches"]
+		valid_verts = valid_verts & np.all(vert_anchors >=0,axis=1)
+		print(np.all(vert_anchors >=0,axis=1))
+		print(np.where(np.all(vert_anchors >=0,axis=1)))
 
 
-		# self.vis.plot_correspondence(target_points,valid_verts,target_frame_data)
+		self.log.debug(f"Valid Visible Skinned Vertices:{np.sum(valid_verts)}/{valid_verts.shape}")
+
+		# if optical_flow_data["source_id"] > -1:
+		# 	savename = f'corresp_{optical_flow_data["source_id"]}_{optical_flow_data["target_id"]}.png'
+		# 	self.vis.plot_correspondence(target_points,valid_verts,target_frame_data,debug=True,savename=savename)
 
 
 		# Checks during debug
@@ -196,6 +268,9 @@ class Deformnet_runner():
 
 		# self.log.debug(f"Weights:{vert_weights[::100]}, {vert_weights.shape}")
 		# self.log.debug(f"Sum of all weights is 1?:{np.sum(vert_weights,axis=1)}")
+
+		print(vert_anchors[vert_anchors<0])
+		print(np.where(vert_anchors<0))
 
 
 		mu, confidence = node_motion_data
@@ -253,7 +328,7 @@ class Deformnet_runner():
 							vertices_cuda,anchors_cuda,weights_cuda,valid_verts,
 							intrinsics_cuda,
 							target_points_cuda,target_normals_cuda,target_points_px_cuda,target_points_py_cuda,
-							prev_rot=rotations_cuda,prev_trans=translations_cuda)
+							prev_rot=rotations_cuda,prev_trans=translations_cuda,gr_deformation=gr_deformation,plot=optical_flow_data["source_id"] > 50)
 		# Post Process output   
 		model_data["node_rotations"]    = model_data["node_rotations"].view(-1, 3, 3).cpu().numpy()
 		model_data["node_translations"] = model_data["node_translations"].view(-1, 3).cpu().numpy()
@@ -263,7 +338,10 @@ class Deformnet_runner():
 
 		model_data["source_frame_id"] = optical_flow_data["source_id"]
 		model_data["target_frame_id"] = optical_flow_data["target_id"]	
-			
+		
+
+		self.save_convergance_info(model_data["convergence_info"][0],model_data["source_frame_id"],model_data["target_frame_id"])	
+
 		return model_data
 
 	def __call__(self,source_data,target_data,graph_data,skin_data):
@@ -289,7 +367,7 @@ class Deformnet_runner():
 
 		
 		# Check all objects map have same number of nodes
-		print([canonical_cuda.shape[1],graph_nodes_cuda.shape[1],graph_edges_cuda.shape[1],graph_edges_weights_cuda.shape[1]])
+		# print([canonical_cuda.shape[1],graph_nodes_cuda.shape[1],graph_edges_cuda.shape[1],graph_edges_weights_cuda.shape[1]])
 		assert len(set([canonical_cuda.shape[1],graph_nodes_cuda.shape[1],\
 			graph_edges_cuda.shape[1],graph_edges_weights_cuda.shape[1]])) == 1,"Not all input maps to correct graph node"
 
@@ -359,6 +437,12 @@ class Deformnet_runner():
 						# print(k,r,model_data[k][r].shape)
 
 		return model_data
+
+
+	def save_convergance_info(self,convergence_info_dict,source_id,target_id):
+		savepath = os.path.join(self.fopt.datadir,"results",f"optimization_convergence_info_{source_id}_{target_id}.json")
+		with open(savepath, "w") as f:
+				json.dump(convergence_info_dict, f)   
 
 
 	def run_arap(self,reduced_graph_dict,model_data, graph,warpfield):

@@ -305,7 +305,7 @@ def modify_intrinsics_due_to_cropping(fx, fy, cx, cy, h, w, original_h=480, orig
     delta_height = (h - original_h) / 2
     cy += delta_height
 
-    delta_width = (w / original_w) / 2
+    delta_width = (w - original_w) / 2
     cx += delta_width
 
     return fx, fy, cx, cy
@@ -338,6 +338,8 @@ def backproject_depth(depth_image, fx, fy, cx, cy, normalizer = 1000.0):
     height = depth_image.shape[0]
 
     point_image = np.zeros((3, height, width), dtype=np.float32)
+
+    # print("Image proc backproject_depth:",[fx,fy,cx,cy])
 
     if depth_image.dtype == np.float32:
         backproject_depth_float_c(depth_image, point_image, fx, fy, cx, cy)

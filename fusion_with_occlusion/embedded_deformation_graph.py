@@ -319,7 +319,7 @@ class EDGraph:
 
         # Cluster nodes in graph
         NEIGHBORHOOD_DEPTH = 2
-        MIN_CLUSTER_SIZE = 3
+        MIN_CLUSTER_SIZE = 10
 
         MIN_NUM_NEIGHBORS = self.graph_generation_parameters["min_neighbours"]
         REMOVE_NODES_WITH_NOT_ENOUGH_NEIGHBORS = True
@@ -501,6 +501,12 @@ class EDGraph:
         # Sample nodes such that they are node_coverage apart from one another 
         new_node_indices = []
         for x in new_verts_indices:
+
+            # Some vertex might erroneously get added if after tsdf update it goes outside node coverage. 
+            # Hence make sure newly added node not already present in graph
+            if np.min(np.linalg.norm(self.nodes - canonical_model_vertices[x], axis=1)) < node_coverage:
+                continue
+
             if len(new_node_indices) == 0:
                 new_node_indices.append(x)
                 continue
@@ -509,6 +515,7 @@ class EDGraph:
             min_nodes_dist = np.min(np.linalg.norm(canonical_model_vertices[new_node_indices] - canonical_model_vertices[x], axis=1))
             if min_nodes_dist < node_coverage: # Not sure if correct
                 continue
+
             self.log.debug(f"Node:{len(new_node_indices)},Vertex index:{x},Min dists:{min_nodes_dist}")
 
             new_node_indices.append(x)
@@ -570,6 +577,7 @@ class EDGraph:
         self.clusters = -np.ones((graph_edges.shape[0], 1), dtype=np.int32) # Will be calculated later 
 
         # self.node_to_vertex_distances = node_to_vertex_distances # Not required except for edge calculatation    
+        self.log.debug("Removing nodes without not enough neighbours")
         self.remove_nodes_with_not_enough_neighbours()
 
         #########################################################################
@@ -582,9 +590,6 @@ class EDGraph:
 
         # I tried implementing the whole update thing. But the results are basically the same. 
         # Its better to use neural tracking setup. :) (This smile represents the time wasted on the whole thing)
-
-
-
 
         return True
 
