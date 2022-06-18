@@ -18,12 +18,17 @@ from fusion_tests import arap_tests
 from fusion_tests import update_graph_test
 from fusion_tests import optimization_tests
 from fusion_tests import motion_complete_model_test
+from fusion_tests import lepard_nicp_test
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logging.getLogger('numba').setLevel(logging.WARNING)
 logging.getLogger('PIL').setLevel(logging.WARNING)
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
+
+logging.getLogger('embedded_deformation_graph').setLevel(logging.INFO)
+# lepard_nicp_test.test2(use_gpu=True)
+lepard_nicp_test.test1(use_gpu=True)
 
 
 

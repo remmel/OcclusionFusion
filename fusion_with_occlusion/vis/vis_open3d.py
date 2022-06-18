@@ -108,7 +108,7 @@ class VisualizeOpen3D(Visualizer):
 		assert hasattr(self,'tsdf'),  "TSDF not defined. Add tsdf as attribute to visualizer first." 
 		verts, faces, normals, color = self.tsdf.get_mesh()  # Extract the new canonical pose using marching cubes
 		
-		print("Canonical Model vertices:",verts.shape)
+		# print("Canonical Model vertices:",verts.shape)
 
 		return self.get_mesh(verts,faces,trans=trans,color=color,normals=normals)	
 
@@ -193,7 +193,14 @@ class VisualizeOpen3D(Visualizer):
 		# target_pcd.colors = o3d.utility.Vector3dVector(points_color)  # Mark boundary points in read
 
 
+
+		# Save it somewhere 
+		target_depth_savepath = os.path.join(self.savepath,"target_pcd",f"{self.tsdf.frame_id}.xyz")
+		o3d.io.write_point_cloud(target_depth_savepath, target_pcd)
 		target_pcd.translate(trans)
+
+
+
 
 		return target_pcd
 
@@ -288,7 +295,53 @@ class VisualizeOpen3D(Visualizer):
 			self.plot([deformed_model,good_matches_set],title="Deformed Model Correspondences",debug=debug,savename=savename)	
 
 	
-	def plot_optimization(self,n_iter,deformed_points,valid_verts,target_points,debug=True):
+	def plot_optimization_sceneflow(self,frame_id,n_iter,warped_points,target_points,target_matches,deformed_nodes,landmarks,debug=True):
+		"""
+			Plot registration during optimization 
+		"""
+
+
+		deformed_nodes = viz_utils.transform_pointcloud_to_opengl_coords(deformed_nodes)
+		# deformed_nodes_rendered = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(deformed_nodes)))
+		# deformed_nodes_rendered.colors = o3d.utility.Vector3dVector(np.array([[0/255, 0/255, 255/255] for i in range(len(deformed_nodes))]))
+
+		deformed_graph_rendered = self.get_rendered_graph(viz_utils.transform_pointcloud_to_opengl_coords(deformed_nodes),self.graph.edges)
+
+
+		warped_points = viz_utils.transform_pointcloud_to_opengl_coords(warped_points)
+		warped_points_rendered = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(warped_points)))
+		warped_points_rendered.colors = o3d.utility.Vector3dVector(np.array([[0/255, 255/255, 0/255] for i in range(len(warped_points))]))
+
+		target_points = viz_utils.transform_pointcloud_to_opengl_coords(target_points)
+		target_points_rendered = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(target_points)))
+		target_points_rendered.colors = o3d.utility.Vector3dVector(np.array([[0/255, 0/255, 255/255] for i in range(len(target_points))]))
+
+		n_match_matches = len(landmarks)
+		if n_match_matches > 1000: 
+			n_match_matches = 1000
+			inds = np.random.choice(len(landmarks),1000,replace=False)
+			landmarks = landmarks[:,ind]
+
+
+		warped_points = warped_points[landmarks[0]]
+		target_matches = target_matches[landmarks[1]]
+		match_matches_points = np.concatenate([warped_points, viz_utils.transform_pointcloud_to_opengl_coords(target_matches)], axis=0)
+		
+		match_matches_lines = [[i, i + n_match_matches] for i in range(0, n_match_matches, 1)]
+
+
+		# --> Create match (unweighted) lines 
+		match_matches_colors = [[201/255, 177/255, 14/255] for i in range(len(match_matches_lines))]
+		match_matches_set = o3d.geometry.LineSet(
+			points=o3d.utility.Vector3dVector(match_matches_points),
+			lines=o3d.utility.Vector2iVector(match_matches_lines),
+		)
+		match_matches_set.colors = o3d.utility.Vector3dVector(match_matches_colors)
+
+		savename = f"NICP_Lepard_{n_iter}_{frame_id}.png"
+		self.plot(deformed_graph_rendered + [warped_points_rendered,target_points_rendered,match_matches_set],f"Iteration:{n_iter}",debug=debug,savename=savename)
+
+	def plot_optimization(self,frame_id,n_iter,deformed_points,valid_verts,target_points,debug=True):
 		"""
 			Plot registration during optimization 
 		"""
@@ -491,21 +544,22 @@ class VisualizeOpen3D(Visualizer):
 		scene_flow = scene_flow_data['scene_flow'] 
 		scene_flow[:,0] += bbox[0]
 
-		n_match_matches = scene_flow_data['source'][scene_flow_data['valid_verts']].shape[0]
-		match_matches_points = np.concatenate([viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]), viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]+scene_flow[scene_flow_data['valid_verts']])], axis=0)
-		match_matches_lines = [[i, i + n_match_matches] for i in range(0, n_match_matches, 1)]
+		# n_match_matches = scene_flow_data['source'][scene_flow_data['valid_verts']].shape[0]
+		# match_matches_points = np.concatenate([viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']])[::100], viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]+scene_flow[scene_flow_data['valid_verts']])[::100]], axis=0)
+		# match_matches_lines = [[i, i + n_match_matches] for i in range(0, n_match_matches, 1)]
 
-		# --> Create match (unweighted) lines 
-		match_matches_colors = [[201/255, 177/255, 14/255] for i in range(len(match_matches_lines))]
-		match_matches_set = o3d.geometry.LineSet(
-			points=o3d.utility.Vector3dVector(match_matches_points),
-			lines=o3d.utility.Vector2iVector(match_matches_lines),
-		)
-		match_matches_set.colors = o3d.utility.Vector3dVector(match_matches_colors)
+		# # --> Create match (unweighted) lines 
+		# match_matches_colors = [[201/255, 177/255, 14/255] for i in range(len(match_matches_lines))]
+		# match_matches_set = o3d.geometry.LineSet(
+		# 	points=o3d.utility.Vector3dVector(match_matches_points),
+		# 	lines=o3d.utility.Vector2iVector(match_matches_lines),
+		# )
+		# match_matches_set.colors = o3d.utility.Vector3dVector(match_matches_colors)
 
 
 
-		color = np.load(os.path.join(self.savepath,"visible_nodes",f"{source_frame}.npy"))
+		# color = np.load(os.path.join(self.savepath,"visible_nodes",f"{source_frame}.npy"))
+		color = None
 		rendered_deformed_nodes,rendered_deformed_edges = self.get_rendered_graph(self.warpfield.get_deformed_nodes(),self.graph.edges,color=color,trans=np.array([0.0, -1.0, 0.00]) * bbox)
 
 
@@ -529,24 +583,116 @@ class VisualizeOpen3D(Visualizer):
 
 
 
+		image_path = os.path.join(self.savepath,"images",f"subplot_{self.tsdf.frame_id}.png")
+		print("Saving results to:",image_path)
 		self.plot([source_pcd,
 			target_pcd,
-			match_matches_set,
+			# match_matches_set,
 			rendered_deformed_nodes,rendered_deformed_edges,
 			# canonical_mesh,rendered_graph_nodes,rendered_graph_edges,
-			deformed_mesh],"Showing frame",debug)
+			deformed_mesh],"Showing frame",debug,savename=image_path)
 
 
 
-		image_path = os.path.join(self.savepath,"images",f"{self.tsdf.frame_id}.png")
-		if debug:
-			self.vis_debug.capture_screen_image(image_path) # TODO: Returns segfault
-		else:
-			self.vis.capture_screen_image(image_path) # TODO: Returns segfault
+		# if debug:
+		# 	self.vis_debug.capture_screen_image(image_path) # TODO: Returns segfault
+		# else:
+		# 	self.vis.capture_screen_image(image_path) # TODO: Returns segfault
 
 		# Save results 
 		canonical_mesh.translate(np.array([0.0, 1.0, 0]) * bbox)
 		o3d.io.write_triangle_mesh(os.path.join(self.savepath,f"canonical_model/{self.tsdf.frame_id}.ply"),canonical_mesh) 
 
 		deformed_mesh.translate(np.array([-1.0, 1.0, 0]) * bbox)
+		o3d.io.write_triangle_mesh(os.path.join(self.savepath,f"deformed_model/{self.tsdf.frame_id}.ply"),deformed_mesh) 
+
+
+	def show_zoomed_in(self,scene_flow_data,source_frame,matches=None,debug=True):
+		"""
+			For visualizing the tsdf integration: 
+			1. Source RGBD + Graph(visible nodes)   2. Target RGBD as Point Cloud 
+			3. Canonical Model + Graph   			3. Deformed Model   
+		"""
+
+		# Top left
+		# source_pcd = self.get_source_RGBD()
+		# source_pcd = o3d.geometry.PointCloud()
+		# source_pcd.points = o3d.utility.Vector3dVector(viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source']))
+		# source_pcd.colors = o3d.utility.Vector3dVector(np.array([[0/255, 255/255, 0/255] for i in range(len(scene_flow_data['source']))]))
+
+	
+		# # Create bounding box for later use 
+		# if not hasattr(self,'bbox'):
+		# 	self.bbox = (source_pcd.get_max_bound() - source_pcd.get_min_bound())
+
+		# bbox = self.bbox
+		# rendered_reduced_graph_nodes,rendered_reduced_graph_edges = self.get_rendered_reduced_graph(trans=np.array([0.0, 0, 0.03]) * bbox)
+
+		# Top right 
+		target_pcd = self.get_target_RGBD()
+		target_pcd.colors = o3d.utility.Vector3dVector(np.array([[0/255, 0/255, 255/255] for i in range(len(target_pcd.points))]))
+
+		# scene_flow = scene_flow_data['scene_flow'] 
+		# # scene_flow[:,0] += bbox[0]
+		# n_match_matches = scene_flow_data['source'][scene_flow_data['valid_verts']].shape[0]
+		# match_matches_points = np.concatenate([viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']])[::100], viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]+scene_flow[scene_flow_data['valid_verts']])[::100]], axis=0)
+		# match_matches_lines = [[i, i + n_match_matches] for i in range(0, n_match_matches, 1)]
+
+		# # --> Create match (unweighted) lines 
+		# match_matches_colors = [[201/255, 177/255, 14/255] for i in range(len(match_matches_lines))]
+		# match_matches_set = o3d.geometry.LineSet(
+		# 	points=o3d.utility.Vector3dVector(match_matches_points),
+		# 	lines=o3d.utility.Vector2iVector(match_matches_lines),
+		# )
+		# match_matches_set.colors = o3d.utility.Vector3dVector(match_matches_colors)
+
+
+
+		# color = np.load(os.path.join(self.savepath,"visible_nodes",f"{source_frame}.npy"))
+		color = None
+		rendered_deformed_nodes,rendered_deformed_edges = self.get_rendered_graph(self.warpfield.get_deformed_nodes(),self.graph.edges,color=color)
+
+
+		# Bottom left
+		canonical_mesh = self.get_model_from_tsdf()
+		# rendered_graph_nodes,rendered_graph_edges = self.get_rendered_graph(self.graph.nodes,self.graph.edges,color=color,trans=np.array([0, -1.0, 0.01]) * bbox)
+
+		# Bottom right
+		deformed_mesh = self.get_deformed_model_from_tsdf()
+		# rendered_reduced_graph_nodes2,rendered_reduced_graph_edges2 = self.get_rendered_reduced_graph(trans=np.array([1.5, -1.5, 0.01]) * bbox)
+		# rendered_deformed_nodes,rendered_deformed_edges = self.get_rendered_graph(self.warpfield.get_deformed_nodes(),self.graph.edges,color=color,trans=np.array([1.0, -1.0, 0.01]) * bbox)
+
+		# Add matches
+		# print(matches)
+		# trans = np.array([0, 0, 0]) * bbox
+		# matches[0].translate(trans)
+		# matches[1].translate(trans)
+		# if matches is not None:
+			# vis.add_geometry(matches[0])
+			# vis.add_geometry(matches[1])
+
+
+
+		image_path = os.path.join(self.savepath,"images",f"{self.tsdf.frame_id}.png")
+		print("Saving results to:",image_path)
+		self.plot([
+			# source_pcd,
+			target_pcd,
+			# match_matches_set,
+			rendered_deformed_nodes,rendered_deformed_edges,
+			# canonical_mesh,rendered_graph_nodes,rendered_graph_edges,
+			deformed_mesh],"Showing frame",debug,savename=image_path)
+
+
+
+		# if debug:
+		# 	self.vis_debug.capture_screen_image(image_path) # TODO: Returns segfault
+		# else:
+		# 	self.vis.capture_screen_image(image_path) # TODO: Returns segfault
+
+		# Save results 
+		# canonical_mesh.translate(np.array([0.0, 1.0, 0]) * bbox)
+		o3d.io.write_triangle_mesh(os.path.join(self.savepath,f"canonical_model/{self.tsdf.frame_id}.ply"),canonical_mesh) 
+
+		# deformed_mesh.translate(np.array([-1.0, 1.0, 0]) * bbox)
 		o3d.io.write_triangle_mesh(os.path.join(self.savepath,f"deformed_model/{self.tsdf.frame_id}.ply"),deformed_mesh) 

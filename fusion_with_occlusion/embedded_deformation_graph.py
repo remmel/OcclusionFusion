@@ -21,9 +21,10 @@ from NeuralNRT._C import sample_nodes as sample_nodes_c
 from NeuralNRT._C import compute_edges_geodesic as compute_edges_geodesic_c
 from NeuralNRT._C import node_and_edge_clean_up as node_and_edge_clean_up_c
 from NeuralNRT._C import compute_clusters as compute_clusters_c
+from NeuralNRT._C import compute_mesh_from_depth as compute_mesh_from_depth_c
 
 class EDGraph: 
-    def __init__(self,tsdf,visualizer):
+    def __init__(self,tsdf,visualizer,source_frame_data):
 
         # Log path 
         self.log = logging.getLogger(__name__)
@@ -36,7 +37,12 @@ class EDGraph:
         # create_graph_from_tsdf
         self.tsdf = tsdf
         self.vis = visualizer
+        self.tsdf.graph = self
+
+        
         self.create_graph_from_tsdf()
+        # self.create_graph_from_depth(source_frame_data)
+
 
     
         # Save path
@@ -77,6 +83,13 @@ class EDGraph:
         self.log.debug(f"Creating graph from mesh. Vertices:{vertices.shape} Faces:{faces.shape}")
         self.create_graph_from_mesh(vertices,faces)
 
+    def create_graph_from_depth(self,source_frame_data):
+        
+        vertices,faces = self.create_mesh_from_depth(source_frame_data)
+        print(vertices.shape,faces.shape)
+        # self.vis.plot([self.vis.get_mesh(vertices,faces)],"",True)
+        self.create_graph_from_mesh(vertices,faces)
+
 
     # If RGBD Image run other steps
     def create_mesh_from_depth(self,im_data,depth_normalizer = 1000.0):
@@ -88,18 +101,19 @@ class EDGraph:
         # Load data.
         #########################################################################
         # Load intrinsics.
-        intrinsics = np.loadtxt(intrinsics_path)
 
-        fx = intrinsics[0, 0]
-        fy = intrinsics[1, 1]
-        cx = intrinsics[0, 2]
-        cy = intrinsics[1, 2]
+        # fx = intrinsics[0, 0]
+        # fy = intrinsics[1, 1]
+        # cx = intrinsics[0, 2]
+        # cy = intrinsics[1, 2]
+        fx,fy,cx,cy = im_data["intrinsics"]
+        print(im_data["intrinsics"])
 
         # Load depth image.
         depth_image = im_data["im"][-1] 
 
         # Load mask image.
-        mask_image = im_data[mask] 
+        mask_image = im_data["im"] > 0
         # if mask_image is None and self.graph_generation_parameters["require_mask"] 
         #########################################################################
         # Convert depth to mesh.
@@ -113,7 +127,8 @@ class EDGraph:
         depth_image = depth_image * mask_image
 
         # Backproject depth images into 3D.
-        point_image = depth_image.astype(np.float32)
+        # point_image = depth_image.astype(np.float32)
+        point_image = im_data["im"][3:].astype(np.float32)
 
         # Convert depth image into mesh, using pixelwise connectivity.
         # We also compute flow values, and invalidate any vertex with non-finite
@@ -180,7 +195,7 @@ class EDGraph:
         # Sample graph nodes.
         node_coords = np.zeros((0), dtype=np.float32)
         node_indices = np.zeros((0), dtype=np.int32)
-
+        
         num_nodes = sample_nodes_c(
             vertices, valid_vertices,
             node_coords, node_indices, 

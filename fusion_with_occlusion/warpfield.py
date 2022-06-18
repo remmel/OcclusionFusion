@@ -14,6 +14,10 @@ from pykdtree.kdtree import KDTree as KDTreeCPU
 from utils import utils, image_proc
 from NeuralNRT._C import compute_mesh_from_depth as compute_mesh_from_depth_c
 
+# Non rigid registration modules
+from NonRigidICP.model.geometry import ED_warp
+
+
 class WarpField:
     def __init__(self, graph, tsdf, visualizer, kdtree_leaf_size=16):
         """
@@ -37,6 +41,7 @@ class WarpField:
 
         self.log = logging.getLogger(__name__)
         self.log.info(f"Adding Warpfield for:{tsdf.__class__.__name__} at frame_id:{self.frame_id}")
+
 
         # Initialize KDTree for finding anchors/skinning
         self.kdtree_leaf_size = kdtree_leaf_size
@@ -66,6 +71,9 @@ class WarpField:
         os.makedirs(os.path.join(self.savepath,"node_motion"),exist_ok=True)
 
         np.save(os.path.join(self.savepath,"deformed_nodes",f"{self.tsdf.fopt.source_frame}.npy"),self.deformed_nodes) # Save data for occlusion fusion 
+
+        self.use_pytorch = True # True to use Non-rigid ICP method else use pycuda method or numba method 
+
 
 
 
@@ -261,33 +269,37 @@ class WarpField:
 
     def deform(self,points,anchors,weights,reshape_gpu_vol,valid_pts):
 
-        rotations = self.rotations.astype(np.float32)
-        translations = self.translations.astype(np.float32)
+        if self.use_pytorch: 
+            deform_pts = self.optimizer.deform_ED(points,anchors,weights,valid_pts) 
 
-        ### Write gpu code for deform world points lbs, currently only works on volume points 
-        if self.gpu:
-            points = np.ascontiguousarray(points.reshape(reshape_gpu_vol+[3]))
-            anchors = anchors.reshape(reshape_gpu_vol+[self.graph_neighbours])
-            weights = weights.reshape(reshape_gpu_vol+[self.graph_neighbours])
-            valid_pts = valid_pts.reshape(reshape_gpu_vol)
-            deform_pts = np.ascontiguousarray(np.zeros_like(points))
+        else:    
+            rotations = self.rotations.astype(np.float32)
+            translations = self.translations.astype(np.float32)
+
+            ### Write gpu code for deform world points lbs, currently only works on volume points 
+            if self.gpu:
+                points = np.ascontiguousarray(points.reshape(reshape_gpu_vol+[3]))
+                anchors = anchors.reshape(reshape_gpu_vol+[self.graph_neighbours])
+                weights = weights.reshape(reshape_gpu_vol+[self.graph_neighbours])
+                valid_pts = valid_pts.reshape(reshape_gpu_vol)
+                deform_pts = np.ascontiguousarray(np.zeros_like(points))
+                
+                threadsperblock = (16, 16)
+                blockspergrid = (np.ceil(points.shape[0] / threadsperblock[0]).astype('uint'), np.ceil(points.shape[1] / threadsperblock[1]).astype('uint'))
+                self.deform_lbs_cuda[blockspergrid, (threadsperblock)](deform_pts, points, 
+                anchors, weights, 
+                rotations, translations,
+                valid_pts)
+                ncuda.synchronize() 
+                deform_pts = deform_pts.reshape(-1,3)
             
-            threadsperblock = (16, 16)
-            blockspergrid = (np.ceil(points.shape[0] / threadsperblock[0]).astype('uint'), np.ceil(points.shape[1] / threadsperblock[1]).astype('uint'))
-            self.deform_lbs_cuda[blockspergrid, (threadsperblock)](deform_pts, points, 
-            anchors, weights, 
-            rotations, translations,
-            valid_pts)
-            ncuda.synchronize() 
-            deform_pts = deform_pts.reshape(-1,3)
-        
-        else:
-            points = np.ascontiguousarray(points)
-            
-            deform_pts = self.deform_lbs(rotations, translations,
-                            points,
-                            anchors, weights,
-                            valid_pts)
+            else:
+                points = np.ascontiguousarray(points)
+                
+                deform_pts = self.deform_lbs(rotations, translations,
+                                points,
+                                anchors, weights,
+                                valid_pts)
 
         return deform_pts
 
@@ -344,8 +356,12 @@ class WarpField:
 
         reshape_gpu_vol = [vertices.shape[0],1,1]        
         deformed_vertices = self.deform(vertices,skin_anchors,skin_weights,reshape_gpu_vol,valid_verts)    
-        deformed_normals = self.deform_normals(normals,skin_anchors,skin_weights,reshape_gpu_vol,valid_verts)    
+        if normals is not None:
+            deformed_normals = self.deform_normals(normals,skin_anchors,skin_weights,reshape_gpu_vol,valid_verts)    
+        else:
+            deformed_normals = None    
 
+        # print("Result of deforming:",deformed_vertices.shape,deformed_normals.shape,skin_anchors.shape,skin_weights.shape,valid_verts.shape)
 
         return deformed_vertices,deformed_normals,skin_anchors,skin_weights,valid_verts        
                     

@@ -15,7 +15,7 @@ class Visualizer: # Base Class which contains all the preprocessing to visualize
         os.makedirs(self.savepath,exist_ok=True)
         os.makedirs(os.path.join(self.savepath,"images"),exist_ok=True)
         os.makedirs(os.path.join(self.savepath,"video"),exist_ok=True)
-
+        os.makedirs(os.path.join(self.savepath,"target_pcd"),exist_ok=True)
         self.colors = np.array([])
 
     def get_color_from_labels(self,labels):

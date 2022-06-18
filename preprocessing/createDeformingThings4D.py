@@ -6,7 +6,8 @@ import sys
 import numpy as np
 from skimage import io
 
-savedir = "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test"
+# savedir = "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test"
+savedir = "/media/srialien/2e32b92f-33a0-4f62-a89f-445621302f09/DeepDeform_Tests/"
 
 def create_sample(raw_depth_path):
 	if raw_depth_path[-1] == '/': raw_depth_path = raw_depth_path[:-1] 

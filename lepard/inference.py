@@ -131,24 +131,22 @@ class Lepard:
 		# 	calulcate_losses(thr,match_pred,output)
 
 		# print(match_pred.shape)	
-		self.plot_corresp(src_pcd,tgt_pcd,match_pred)
+		# self.plot_corresp(src_pcd,tgt_pcd,match_pred)
 
 		assert len(np.unique(match_pred[:,1])) == match_pred.shape[0] 
 
-		scene_flow,mask = blend_anchor_motion(source_pcd,src_pcd[match_pred[:,1]],tgt_pcd[match_pred[:,2]] - src_pcd[match_pred[:,1]],knn=3,search_radius=0.1)
-		self.plot_scene_flow(source_pcd[mask],target_pcd,scene_flow[mask])
-
-
-
+		scene_flow,corresp,mask = blend_anchor_motion(source_pcd,src_pcd[match_pred[:,1]],tgt_pcd[match_pred[:,2]] - src_pcd[match_pred[:,1]],knn=3,search_radius=1e-1)
+		# self.plot_scene_flow(source_pcd[mask],target_pcd,scene_flow[mask],corresp)
 
 		print("Scene flows")
 		print(np.mean(np.linalg.norm(tgt_pcd[match_pred[:,2]] - src_pcd[match_pred[:,1]],axis=1)))
 		print(np.mean(np.linalg.norm(scene_flow,axis=1)))
 
-		return scene_flow,mask	
+
+		return scene_flow,corresp,mask	
 
 
-	def plot_scene_flow(self,source_pcd,target_pcd,scene_flow):
+	def plot_scene_flow(self,source_pcd,target_pcd,scene_flow,corresp):
 
 		# scene_flow[:,0] -= 1
 		# target_pcd[:,0] -= 1
@@ -189,9 +187,11 @@ class Lepard:
 
 		source_rendered_pcd = o3d.geometry.PointCloud()
 		source_rendered_pcd.points = o3d.utility.Vector3dVector(source_pcd)
+		source_rendered_pcd.colors = o3d.utility.Vector3dVector(np.array([[0/255, 255/255, 0/255] for i in range(len(source_pcd))]))
 
 		target_rendered_pcd = o3d.geometry.PointCloud()
 		target_rendered_pcd.points = o3d.utility.Vector3dVector(target_pcd)
+		target_rendered_pcd.colors = o3d.utility.Vector3dVector(np.array([[0/255, 0/255, 255/255] for i in range(len(target_pcd))]))
 
 		n_match_matches = match_pred.shape[0]
 		match_matches_points = np.concatenate([source_pcd[match_pred[:,1]], target_pcd[match_pred[:,2]]], axis=0)

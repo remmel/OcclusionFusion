@@ -71,7 +71,7 @@ def create_open3d_graph(graph_nodes,graph_edges,color=None):
                     break
                 edges_pairs.append([node_id, neighbor_id])    
 
-        colors = [[0.2, 1.0, 0.2] for i in range(len(edges_pairs))]
+        colors = [[0.0, 0.0, 0.0] for i in range(len(edges_pairs))]
         line_mesh = line_mesh_utils.LineMesh(graph_nodes, edges_pairs, colors, radius=0.0006*size)
         line_mesh_geoms = line_mesh.cylinder_segments
         # Merge all different line meshes

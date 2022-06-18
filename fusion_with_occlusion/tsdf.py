@@ -36,16 +36,19 @@ class TSDFVolume:
     """
         Volumetric TSDF Fusion of RGB-D Images.
     """
-    def __init__(self, max_depth, cam_intr,fopt,visualizer):   
+    def __init__(self,bbox, max_depth, cam_intr,fopt,visualizer):   
         """
         Args:
+            bbox: (bounding box of the captured region using the mask.)
             max_depth (float): Maximum depth in the sequence 
             cam_intr (np.array(4)): fx,fy,cx,cy (camera interincs parameters)
             fopt (options/hyperparmers): Arguments passed by user for fusion
+            voxel_dim (np.ndarray), 3, 
         """
 
-        # voxel_size (float): The volume discretization in meters.cam_pose
-        voxel_size = fopt.voxel_size
+        # Save fusion hyperparameters for future use
+        self.fopt = fopt
+        self.vis  = visualizer
 
         self.cam_intr = np.eye(3)
         self.cam_intr[0, 0] = cam_intr[0]
@@ -55,18 +58,26 @@ class TSDFVolume:
 
         # print("Camera intr at tsdf:",self.cam_intr)
 
-        # Save fusion hyperparameters for future use
-        self.fopt = fopt
-        self.vis  = visualizer
 
         # Get corners of 3D camera view frustum of depth image
-        im_h = opt.image_height
-        im_w = opt.image_width
+        # im_h = opt.image_height
+        # im_w = opt.image_width
+        # view_frust_pts = np.array([
+        #     (np.array([0, 0, 0, im_w, im_w])-self.cam_intr[0, 2])*np.array([0, max_depth, max_depth, max_depth, max_depth])/self.cam_intr[0, 0],
+        #     (np.array([0, 0, im_h, 0, im_h])-self.cam_intr[1, 2])*np.array([0, max_depth, max_depth, max_depth, max_depth])/self.cam_intr[1, 1],
+        #     np.array([0, max_depth, max_depth, max_depth, max_depth])
+        # ])
+
+        # print("Old:",view_frust_pts)
+        
+        w_min,h_min,w_max,h_max = bbox
         view_frust_pts = np.array([
-            (np.array([0, 0, 0, im_w, im_w])-self.cam_intr[0, 2])*np.array([0, max_depth, max_depth, max_depth, max_depth])/self.cam_intr[0, 0],
-            (np.array([0, 0, im_h, 0, im_h])-self.cam_intr[1, 2])*np.array([0, max_depth, max_depth, max_depth, max_depth])/self.cam_intr[1, 1],
+            (np.array([0, w_min, w_min, w_max, w_max])-self.cam_intr[0, 2])*np.array([0, max_depth, max_depth, max_depth, max_depth])/self.cam_intr[0, 0],
+            (np.array([0, h_min, h_max, h_min, h_max])-self.cam_intr[1, 2])*np.array([0, max_depth, max_depth, max_depth, max_depth])/self.cam_intr[1, 1],
             np.array([0, max_depth, max_depth, max_depth, max_depth])
         ])
+        print("New:",view_frust_pts)
+
 
         # Estimate the bounding box for the volume
         vol_bnds = np.asarray([np.min(view_frust_pts, axis=1), np.max(view_frust_pts, axis=1)]).T
@@ -74,19 +85,46 @@ class TSDFVolume:
 
         # Define voxel volume parameters
         self._vol_bnds = vol_bnds
-        self._voxel_size = float(voxel_size)
-        self._trunc_margin = 10 * self._voxel_size  # truncation on SDF
-        # TODO needs to be estimated correctly, causing more nodes to be added to graph. See Dynamic Fusion Section 4.2 
         self._color_const = 256 * 256
 
-        # Adjust volume bounds and ensure C-order contiguous
-        self._vol_dim = np.ceil((self._vol_bnds[:, 1]-self._vol_bnds[:, 0])/self._voxel_size).copy(order='C').astype(int)
+        # voxel_size (float): The volume discretization in meters.cam_pose
+
+
+        if hasattr(fopt,"voxel_dim"): 
+            voxel_dim = fopt.voxel_dim
+            if type(voxel_dim) == int:
+                self._vol_dim = np.array([voxel_dim,voxel_dim,voxel_dim])
+            elif type(voxel_dim) == list:
+                assert len(voxel_dim) == 3,f"Voxel dimension should have length = 3 found {voxel_dim}"
+                self._vol_dim = np.array(voxel_dim)
+            elif type(voxel_dim) == np.ndarray:
+                assert voxel_dim.shape[0] == 3,f"Voxel dimension should have length = 3 found {voxel_dim}"
+                self._vol_dim = voxel_dim
+
+            self._voxel_size = (self._vol_bnds[:,1] - self._vol_bnds[:,0])/self._vol_dim # Find the volume of shortest voxel to represent the grid   
+            self._voxel_size = self._voxel_size.max() # Create the largest grid so no points get out. 
+
+            
+        elif hasattr(fopt,"voxel_size"):
+
+            voxel_size = fopt.voxel_size
+
+            self._voxel_size = float(voxel_size)
+            # TODO needs to be estimated correctly, causing more nodes to be added to graph. See Dynamic Fusion Section 4.2 
+
+            # Adjust volume bounds and ensure C-order contiguous
+            self._vol_dim = np.ceil((self._vol_bnds[:, 1]-self._vol_bnds[:, 0])/self._voxel_size).copy(order='C').astype(int)
+
+
+        # Update voxel boundary based on calculated size and dimension 
+        self._trunc_margin = 10 * self._voxel_size  # truncation on SDF
         self._vol_bnds[:, 1] = self._vol_bnds[:, 0]+self._vol_dim*self._voxel_size
         self._vol_origin = self._vol_bnds[:, 0].copy(order='C').astype(np.float32)
 
         # Define TSDF in CPU
         # Initialize pointers to voxel volume in CPU memory
         self._tsdf_vol_cpu = np.ones(self._vol_dim).astype(np.float32)
+
 
         # Define Weights in CPU 
         # for computing the cumulative moving average of observations per voxel
@@ -95,7 +133,7 @@ class TSDFVolume:
         # Define Color in CPU
         self._color_vol_cpu = np.zeros(self._vol_dim).astype(np.float32)
 
-        print(f"Initializing TSDF Volume:\n\tmax_depth:{max_depth}\n\tVolume Bounds:{vol_bnds}\n\tvoxel_size:{voxel_size}")
+        print(f"Initializing TSDF Volume:\n\tmax_depth:{max_depth}\n\tVolume Bounds:{self._vol_bnds}\n\tvoxel_size:{self._voxel_size}")
         print("Voxel Origin:", self._vol_origin)
         print(f"Voxel volume size: {self._vol_dim} - # points: {self._vol_dim[0]*self._vol_dim[1]*self._vol_dim[2]}")
 
@@ -344,8 +382,8 @@ class TSDFVolume:
         # Begin integration 
         im_h, im_w = self.depth_im.shape
         if self.gpu_mode:  # GPU mode: integrate voxel volume (calls CUDA kernel)
-            if self.frame_id > self.fopt.source_frame: 
-                return 
+            # if self.frame_id > self.fopt.source_frame: 
+            #     return 
             cam_pts = cam_pts.reshape(-1,3)
             valid_points 
             pycuda_ctx.push()
@@ -434,11 +472,11 @@ class TSDFVolume:
             new_r = np.minimum(255., np.round((w_old*old_r + obs_weight*new_r) / w_new))
             self._color_vol_cpu[valid_vox_x, valid_vox_y, valid_vox_z] = new_b*self._color_const + new_g*256 + new_r
 
-        # Project to image space 
-
-        # Calculate truncation 
 
         # Calculate weights
+
+        # Save tsdf data to results 
+        self.save_volume(os.path.join(self.savepath,"tsdf",f"{self.frame_id}.pkl"))
 
 
 
@@ -615,15 +653,15 @@ class TSDFVolume:
                 tsdf_vol: np.ndarray TSDF Volume, containing truncated signed distance values across the grid
                 max_diff: max distance allowed between sdf 
         """
-        truncated_region = np.ones_like(tsdf_vol, dtype=bool_)
         W,H,D = tsdf_vol.shape
+        truncated_region = np.ones_like(tsdf_vol, dtype=bool_)
         for i in prange(W*H*D):
-            w = i//(H*W)
+            w = i//(H*D)
             h = (i//D)%H
             d = i%D
 
             # If not calculated region skip  
-            if tsdf_vol[w,h,d] == 1.:
+            if abs(tsdf_vol[w,h,d]) > 0.9:
                 truncated_region[w,h,d] = False
                 continue
             
@@ -636,6 +674,9 @@ class TSDFVolume:
             for dw in range(-1,2):
                 for dh in range(-1,2):
                     for dd in range(-1,2):
+                        if abs(tsdf_vol[w,h,d]) > 0.9:
+                            truncated_region[w+dw,h+dh,d+dd] = False  
+
                         if abs(tsdf_vol[w+dw,h+dh,d+dd] - tsdf_vol[w,h,d]) > max_diff: 
                             truncated_region[w,h,d] = False                                                                        
 
@@ -672,11 +713,21 @@ class TSDFVolume:
         # self.log.debug(tsdf_vol[tsdf_vol.shape[0]//2,tsdf_vol.shape[1]//2,:])
         
         diff_tsdf = self.compute_truncated_region(tsdf_vol,1.2) # Check all sides of voxel 
-        # self.log.debug(diff_tsdf[diff_tsdf.shape[0]//2,diff_tsdf.shape[1]//2,:])
-        verts, faces, norms, vals = measure.marching_cubes(tsdf_vol, mask=diff_tsdf, level=0) # Level denotes the crossing. Here its 0 cro
+
+        # print("Z:direction")        
+        # print([x for x in zip(tsdf_vol[diff_tsdf.shape[0]//2,diff_tsdf.shape[1]//2,:],diff_tsdf[diff_tsdf.shape[0]//2,diff_tsdf.shape[1]//2,:])])
+        # print("Y Direction")
+        # print([x for x in zip(tsdf_vol[diff_tsdf.shape[0]//2,:,diff_tsdf.shape[2]//2],diff_tsdf[diff_tsdf.shape[0]//2,:,diff_tsdf.shape[2]//2])])
+        # print("X direction")
+        # print([x for x in zip(tsdf_vol[:,diff_tsdf.shape[1]//2,diff_tsdf.shape[2]//2],diff_tsdf[:,diff_tsdf.shape[1]//2,diff_tsdf.shape[2]//2])])
+
+
+        verts, faces, norms, vals = measure.marching_cubes(tsdf_vol, mask=diff_tsdf, level=0) # Level denotes the crossing. Here its 0 crossing 
+        
 
         verts_ind = np.round(verts).astype(int)
         verts = verts*self._voxel_size+self._vol_origin  # voxel grid coordinates to world coordinates
+
 
         # Get vertex colors
         rgb_vals = color_vol[verts_ind[:, 0], verts_ind[:, 1], verts_ind[:, 2]]
@@ -685,6 +736,7 @@ class TSDFVolume:
         colors_r = rgb_vals-colors_b*self._color_const-colors_g*256
         colors = np.floor(np.asarray([colors_r, colors_g, colors_b])).T
         colors = colors.astype(np.uint8)
+
         return verts, faces, norms, colors
 
     def get_canonical_model(self):  
@@ -728,10 +780,10 @@ class TSDFVolume:
         return self.deformed_model
 
     def load_deformed_mesh(self):
-        pass
+        return False
 
     def save_deformed_mesh(self):
-        pass
+        return False
 
     def clear(self):
         """

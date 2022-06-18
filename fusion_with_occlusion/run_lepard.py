@@ -70,9 +70,9 @@ class Lepard_runner():
 		# print(np.mean(source_vertices,axis=0))
 		# print(np.mean(target_pcd,axis=0))
 
-		scene_flow,valid_verts = self.lepard(source_vertices,target_pcd)
+		scene_flow,corresp,valid_verts = self.lepard(source_vertices,target_pcd)
 		target_matches = source_vertices.copy()
 		target_matches[valid_verts] += scene_flow[valid_verts]
 
-		scene_flow_data = {'source':source_vertices,'scene_flow': scene_flow,"valid_verts":valid_verts,"target_matches":target_matches}	
+		scene_flow_data = {'source':source_vertices,'scene_flow': scene_flow,"valid_verts":valid_verts,"target_matches":target_matches,'landmarks':corresp}	
 		return scene_flow_data

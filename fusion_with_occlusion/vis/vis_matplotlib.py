@@ -1,4 +1,5 @@
 # Python Imports
+import os
 import numpy as np
 import open3d as o3d
 
@@ -18,10 +19,10 @@ from .visualizer import Visualizer
 class VisualizeMatplotlib(Visualizer):
 	def __init__(self,opt):
 		super().__init__(opt)
-
+		self.fig = plt.figure(figsize=(16,4))
+		
 	# Todo needs to updated for arbitary subplots	
 	def create_fig3D(self,azim=0,elev=-90,title="Matplotlib plot"):	
-		self.fig = plt.figure()
 		self.ax = self.fig.add_subplot(111, projection='3d')
 		self.title = title
 
@@ -92,6 +93,27 @@ class VisualizeMatplotlib(Visualizer):
 		plt.draw()
 		plt.pause(pause)	
 				
+	def plot_depth_images(self,depth_image_list,savename=None):
+		plt.cla()	
+
+		for i,im in enumerate(depth_image_list):
+			# print(100 + (i+1)*10 + len(depth_image_list))	
+			ax = self.fig.add_subplot(100 + 10*len(depth_image_list) + i+1)
+
+			im = im.detach().cpu().numpy()
+			if im.dtype == np.float32 and im.max() > 1:
+				im /= im.max()
+			if im.shape[-1] > 3:
+				im = im[...,0]
+			# print(im.shape)
+			ax.imshow(im)
+			ax.axis('off')
+		if savename is not None:
+			plt.savefig(os.path.join(self.savepath,"images",savename))
+
+		plt.draw()
+		plt.pause(0.1)
+
 
 	def imshow(self,im):
 		print("reached here?")
