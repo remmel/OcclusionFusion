@@ -57,7 +57,7 @@ class Registration():
 
         self.vis = vis
 
-
+        self.prev_R = None
         self.prev_rot = None
         self.prev_trans = None
 
@@ -95,7 +95,7 @@ class Registration():
         # self.pix_2_pcd_map = [ self.map_pixel_to_pcd(valid_pixels).to(self.config.device) ] # TODO
 
 
-    def optimize(self, optical_flow_data,scene_flow_data,target_frame_data, landmarks=None):
+    def optimize(self, optical_flow_data,scene_flow_data,complete_node_motion_data,target_frame_data, landmarks=None):
         """
         :param tgt_depth_path:
         :return:
@@ -127,7 +127,15 @@ class Registration():
         #     landmarks = (s_ldmk, t_ldmk)
 
         # self.visualize_results(self.tgt_pcd)
-        estimated_transforms = self.solve(target_matches=target_matches,landmarks=landmarks)
+
+        target_graph_node_location, target_graph_node_confidence = complete_node_motion_data
+        target_graph_node_location = torch.from_numpy(target_graph_node_location).to(self.device) if target_graph_node_location is not None else None
+        target_graph_node_confidence = torch.from_numpy(target_graph_node_confidence).to(self.device) if target_graph_node_confidence is not None else None
+
+
+        estimated_transforms = self.solve(target_matches=target_matches,landmarks=landmarks,\
+            target_graph_node_location=target_graph_node_location,
+            target_graph_node_confidence=target_graph_node_confidence)
         # self.visualize_results( self.tgt_pcd, estimated_transforms["warped_verts"])
 
         estimated_transforms["source_frame_id"] = optical_flow_data["source_id"]
@@ -146,32 +154,39 @@ class Registration():
             return self.optimize_ED(**kwargs)
 
     
-    def deform_ED(self,points,anchors,weights,valid_pts):
+    def deform_ED(self,points,anchors,weights,valid_pts,batch_size=128**3):
 
         # convert to pytorch
+        with torch.no_grad():
+            return_points = points.copy()
 
-        anchor_trn = self.t[anchors]
-        anchor_rot = self.R[anchors]
-        anchor_loc = self.graph_nodes[anchors]
-        
-        return_points = points.copy()
-        points = torch.from_numpy(points).to(self.device)
-        weights = torch.from_numpy(weights).to(self.device)
+            # Run in batches since above certain points leads to out of memory issue
+            chunks = [ (i,min(points.shape[0],i + batch_size)) for i in range(0, points.shape[0], batch_size)]
+            
+            for chunk in chunks:  
+                l,r = chunk
+                points_batch = torch.from_numpy(points[l:r]).to(self.device)
+                weights_batch = torch.from_numpy(weights[l:r]).to(self.device)
+                anchors_batch = anchors[l:r]
+
+                anchor_trn_batch = self.t[anchors_batch]
+                anchor_rot_batch = self.R[anchors_batch]
+                anchor_loc_batch = self.graph_nodes[anchors_batch]
+
+                warped_points_batch = ED_warp(points_batch, anchor_loc_batch, anchor_rot_batch, anchor_trn_batch, weights_batch)        
+
+                valid_pts_batch = valid_pts[l:r]
+
+                return_points[l:r][valid_pts_batch] = warped_points_batch[valid_pts_batch].detach().cpu().numpy() # Returns points padded with invalid points
 
 
-        print(anchors,weights)
 
-        warped_points = ED_warp(points, anchor_loc, anchor_rot, anchor_trn, weights)        
-
-
-        return_points[valid_pts] = warped_points[valid_pts].detach().cpu().numpy() # Returns points padded with invalid points
+            return return_points
 
 
-
-        return return_points
-
-
-    def optimize_ED(self, target_matches=None, landmarks=None):
+    def optimize_ED(self, target_matches=None, landmarks=None,
+            target_graph_node_location=None,
+            target_graph_node_confidence=None):
         '''
         :param landmarks:
         :return:
@@ -219,6 +234,9 @@ class Registration():
                 "depth":[],
                 "chamfer":[],
                 "silh":[],
+                "motion": [],
+                "smooth_rot": [],
+                "smooth_trans": [],
                 "grad_trans":[],
                 "grad_rot":[]}
 
@@ -227,7 +245,7 @@ class Registration():
 
             anchor_trn = self.t [self.point_anchors]
             anchor_rot = self.R [ self.point_anchors]
-            print(self.source_pcd.shape, self.anchor_loc.shape, anchor_rot.shape, anchor_trn.shape, self.anchor_weight.shape)
+            # print(self.source_pcd.shape, self.anchor_loc.shape, anchor_rot.shape, anchor_trn.shape, self.anchor_weight.shape)
             warped_pcd = ED_warp(self.source_pcd, self.anchor_loc, anchor_rot, anchor_trn, self.anchor_weight)
 
             err_arap = arap_cost(self.R, self.t, self.graph_nodes, self.graph_edges, self.graph_edges_weights)
@@ -236,20 +254,35 @@ class Registration():
             else:    
                 err_ldmk = landmark_cost(warped_pcd, target_matches, landmarks) if landmarks is not None else 0
 
-            sil_src, d_src, _ = self.render_pcd(warped_pcd)
+            if self.config.w_silh > 0 or self.config.w_depth > 0: 
+                sil_src, d_src, _ = self.render_pcd(warped_pcd) 
             err_silh = silhouette_cost(sil_src, sil_tgt) if self.config.w_silh > 0 else 0
-            err_depth,depth_error_image = projective_depth_cost(d_src, d_tgt) if self.config.w_depth > 0 else 0
+            err_depth,depth_error_image = projective_depth_cost(d_src, d_tgt) if self.config.w_depth > 0 else 0,0
+
+            # print(self.graph_nodes  + self.t)
+            # print(target_graph_node_location)
+
+            err_motion = occlusion_fusion_graph_motion_cost(self.graph_nodes,self.t,
+                    target_graph_node_location,
+                    target_graph_node_confidence) if self.config.w_motion > 0 and target_graph_node_location is not None and target_graph_node_confidence is not None else 0
 
 
-
+            # print("Motion Error:",err_motion)
             cd = chamfer_dist(warped_pcd, self.tgt_pcd) if self.config.w_chamfer > 0 else 0
+
+        
+            err_smooth_trans = ((self.t - self.prev_trans)**2).mean() if self.prev_trans is not None and self.config.w_smooth_trans > 0 else 0     
+            err_smooth_rot = ((self.R - self.prev_R)**2).mean() if self.prev_R is not None and self.config.w_smooth_rot > 0 else 0
 
             loss = \
                 err_arap * self.config.w_arap + \
                 err_ldmk * self.config.w_ldmk + \
                 err_silh * self.config.w_silh + \
                 err_depth * self.config.w_depth + \
-                cd * self.config.w_chamfer
+                cd * self.config.w_chamfer + \
+                err_motion * self.config.w_motion + \
+                err_smooth_rot * self.config.w_smooth_rot + \
+                err_smooth_trans * self.config.w_smooth_trans
             
 
             if loss.item() < 1e-7:
@@ -261,8 +294,8 @@ class Registration():
             scheduler.step()    
 
             lr = optimizer.param_groups[0]["lr"]
-            print((warped_pcd[landmarks[0]]-target_matches[landmarks[1]]).max())
-            print("\t-->Iteration: {0}. Lr:{1:.5f} Loss: arap = {2:.3f}, ldmk = {3:.6f}, chamher:{4:.6f} silh = {5:.3f} depth = {6:.7f} total = {7:.3f}".format(i, lr,err_arap, err_ldmk, cd, err_silh,err_depth,loss.item()))
+            # print((warped_pcd[landmarks[0]]-target_matches[landmarks[1]]).max())
+            print(f"Frame:{self.warpfield.frame_id}" + "\t-->Iteration: {0}. Lr:{1:.5f} Loss: arap = {2:.3f}, ldmk = {3:.6f}, chamher:{4:.6f} silh = {5:.3f} depth = {6:.7f} motion = {7:.7f} smooth rot:{8:.7f} smooth trans:{9:.7f} total = {10:.3f}".format(i, lr,err_arap, err_ldmk, cd, err_silh,err_depth,err_motion,err_smooth_rot,err_smooth_trans,loss.item()))
 
 
             convergence_info["lmdk"].append(np.sqrt(err_ldmk.item()/landmarks.shape[0]) if landmarks is not None else 0)
@@ -270,20 +303,66 @@ class Registration():
             convergence_info["chamfer"].append(cd.item() if self.config.w_chamfer > 0 else 0 )
             convergence_info["silh"].append(err_silh.item() if self.config.w_silh > 0 else 0 )
             convergence_info["depth"].append(err_depth.item() if self.config.w_depth > 0 else 0 )
+            convergence_info["motion"].append(err_motion.item() if self.config.w_motion > 0 and target_graph_node_location is not None else 0 )
+            convergence_info["smooth_trans"].append(err_smooth_trans.item() if self.prev_trans is not None and self.config.w_smooth_trans > 0 else 0 )
+            convergence_info["smooth_rot"].append(err_smooth_rot.item() if self.prev_R is not None and self.config.w_smooth_rot > 0 else 0 )
             convergence_info["total"].append(loss.item())
 
+        # # Smooth graph using just arap
+        # for i in range(100):
+
+        #     err_arap = arap_cost(self.R, self.t, self.graph_nodes, self.graph_edges, self.graph_edges_weights)
+
+        #     if err_arap.item() < 1e-7:
+        #         break
+
+        #     optimizer.zero_grad()
+        #     err_arap.backward()
+        #     optimizer.step()
+        #     scheduler.step()    
+
+        #     lr = optimizer.param_groups[0]["lr"]
+        #     print("\t-->Smoothing Iteration: {0}. Lr:{1:.5f} Loss: arap = {2:.3f}".format(i, lr,err_arap))
+
+        # only chamfer and arap loss
+        # for i in range(100):
+
+        #     anchor_trn = self.t [self.point_anchors]
+        #     anchor_rot = self.R [ self.point_anchors]
+        #     # print(self.source_pcd.shape, self.anchor_loc.shape, anchor_rot.shape, anchor_trn.shape, self.anchor_weight.shape)
+        #     warped_pcd = ED_warp(self.source_pcd, self.anchor_loc, anchor_rot, anchor_trn, self.anchor_weight)
+
+        #     err_arap = arap_cost(self.R, self.t, self.graph_nodes, self.graph_edges, self.graph_edges_weights)
+
+        #     # print("Motion Error:",err_motion)
+        #     cd = chamfer_dist(warped_pcd, self.tgt_pcd) if self.config.w_chamfer > 0 else 0
+
+        #     loss = \
+        #         err_arap * self.config.w_arap + \
+        #         cd * self.config.w_chamfer/10
+
+        #     if err_arap.item() < 1e-7:
+        #         break
+
+        #     optimizer.zero_grad()
+        #     err_arap.backward()
+        #     optimizer.step()
+        #     scheduler.step()    
+
+        #     lr = optimizer.param_groups[0]["lr"]
+        #     print(f"Frame:{self.warpfield.frame_id}" + "\t-->Final Smoothing Iteration: {0}. Lr:{1:.5f} Loss: chamfer:{2:.7f} arap = {3:.7f} total: {4:.7f}".format(i, lr,err_arap,cd, loss.item()))
 
 
-            deformed_nodes = (self.graph_nodes+self.t).detach().cpu().numpy()
-
-
-        # Plot results:
-        self.vis.plot_optimization_sceneflow(self.warpfield.frame_id,i,warped_pcd.detach().cpu().numpy(),self.tgt_pcd.detach().cpu().numpy(),target_matches.detach().cpu().numpy(),deformed_nodes,landmarks,debug=False)
-
-        # self.vis.plot_depth_images([sil_src,d_src,sil_tgt,d_tgt,depth_error_image],savename=f"RenderedImages_{i}.png")
+        #     # Plot results:
+        #     if self.warpfield.frame_id > 45:
+        #         deformed_nodes = (self.graph_nodes+self.t).detach().cpu().numpy()
+        #         targtarget_graph_node_location = target_graph_node_location.detach().cpu().numpy() if target_graph_node_location is not None else None 
+        #         self.vis.plot_optimization_sceneflow(self.warpfield.frame_id,i,warped_pcd.detach().cpu().numpy(),self.tgt_pcd.detach().cpu().numpy(),target_matches.detach().cpu().numpy(),deformed_nodes,landmarks,target_graph_node_location, debug=False)
+        #          # self.vis.plot_depth_images([sil_src,d_src,sil_tgt,d_tgt,depth_error_image],savename=f"RenderedImages_{i}.png")
 
         quat_data = self.R.retr().data
 
+        self.prev_R = self.R.detach()
         self.prev_rot = quat_data.clone()
         self.prev_trans = self.t.detach().clone()
 

@@ -270,6 +270,7 @@ class WarpField:
     def deform(self,points,anchors,weights,reshape_gpu_vol,valid_pts):
 
         if self.use_pytorch: 
+
             deform_pts = self.optimizer.deform_ED(points,anchors,weights,valid_pts) 
 
         else:    

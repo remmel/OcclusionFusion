@@ -3,11 +3,14 @@ gpu_mode: True
 lr: 0.06
 gamma: 0.999
 deformation_model: ED
-w_silh: 1.0
+w_silh: 000.0
 w_ldmk: 1
 w_arap: 10
-w_chamfer: 1.0
-w_depth: 1.0
+w_chamfer: 0.0
+w_depth: 0000.0
+w_motion: 100.0
+w_smooth_trans: 0.0
+w_smooth_rot: 0.0
 
 
 #demo data

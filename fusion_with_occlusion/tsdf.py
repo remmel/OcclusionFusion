@@ -6,6 +6,8 @@ import sys
 import pickle
 import numpy as np
 import logging 
+import open3d as o3d
+
 
 from numba import njit, prange
 from numba.types import bool_ # Required for calculating truncated region, np.bool inside numbda doesn't work 
@@ -115,9 +117,14 @@ class TSDFVolume:
             # Adjust volume bounds and ensure C-order contiguous
             self._vol_dim = np.ceil((self._vol_bnds[:, 1]-self._vol_bnds[:, 0])/self._voxel_size).copy(order='C').astype(int)
 
+            # Make sure all dimensions are same
+            # self._vol_dim = np.ceil((self._vol_bnds[:, 1]-self._vol_bnds[:, 0])/self._voxel_size).copy(order='C').astype(int).max()
+            # self._vol_dim = np.array([self._vol_dim,self._vol_dim,self._vol_dim])
+
 
         # Update voxel boundary based on calculated size and dimension 
-        self._trunc_margin = 10 * self._voxel_size  # truncation on SDF
+        # self._trunc_margin = 20 * self._voxel_size  # truncation on SDF
+        self._trunc_margin = 0.04  # truncation on SDF
         self._vol_bnds[:, 1] = self._vol_bnds[:, 0]+self._vol_dim*self._voxel_size
         self._vol_origin = self._vol_bnds[:, 0].copy(order='C').astype(np.float32)
 
@@ -132,6 +139,20 @@ class TSDFVolume:
 
         # Define Color in CPU
         self._color_vol_cpu = np.zeros(self._vol_dim).astype(np.float32)
+
+
+        # Dummy VoxelGrid from open3d to use to later to run marching cubes 
+        # resolution = self._vol_dim[0]
+        # assert np.all(resolution == self._vol_dim), f"Voxel dimension not consistant across dimensions,{self._vol_dim}"
+        # self.o3d_volume = o3d.pipelines.integration.UniformTSDFVolume(self._vol_dim[0]*self._voxel_size,
+        #     resolution,
+        #     self._trunc_margin,
+        #     o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
+        #     self._vol_origin)
+
+        # self.o3d_volume_scalable = o3d.pipelines.integration.ScalableTSDFVolume(voxel_length=4/512,sdf_trunc=0.04,
+        #     color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8)
+
 
         print(f"Initializing TSDF Volume:\n\tmax_depth:{max_depth}\n\tVolume Bounds:{self._vol_bnds}\n\tvoxel_size:{self._voxel_size}")
         print("Voxel Origin:", self._vol_origin)
@@ -476,8 +497,49 @@ class TSDFVolume:
         # Calculate weights
 
         # Save tsdf data to results 
-        self.save_volume(os.path.join(self.savepath,"tsdf",f"{self.frame_id}.pkl"))
+        # self.save_volume(os.path.join(self.savepath,"tsdf",f"{self.frame_id}.pkl"))
 
+        # verts, faces, normals, color = self.get_canonical_model()  # Extract the new canonical pose using marching cubes
+        # mesh_og = self.vis.get_mesh(verts,faces,color=color,normals=normals)
+
+        # # Note calling after save volume because this will cause tsdf_cpu to be updated
+        # # inject_data = np.concatenate([self._tsdf_vol_cpu,self._weight_vol_cpu],axis=0).reshape(2,-1).T
+        # # print(inject_data.shape)
+        # # inject_data = o3d.utility.Vector2dVector(inject_data)
+        # color = o3d.io.read_image(os.path.join(self.fopt.datadir,'color',"0000.png"))
+        # depth = o3d.io.read_image(os.path.join(self.fopt.datadir,'depth',"0000.png"))
+
+        # rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+        #     color, depth, depth_trunc=4.0, convert_rgb_to_intensity=False)
+
+        # camera = np.loadtxt(os.path.join(self.fopt.datadir,"intrinsics.txt"))
+        # camera = o3d.camera.PinholeCameraIntrinsic(512,500,*camera[ [0,1,0,1],[0,1,2,2]])
+
+        # self.o3d_volume.integrate(
+        #     rgbd,
+        #     camera,
+        #     np.eye(4))
+
+        # self.o3d_volume_scalable.integrate(
+        #     rgbd,
+        #     camera,
+        #     np.eye(4))
+
+        # mesh_open3d = self.o3d_volume.extract_triangle_mesh()
+        # mesh_open3d = self.vis.get_mesh(np.asarray(mesh_open3d.vertices),np.asarray(mesh_open3d.triangles))
+
+
+        # mesh_open3d_scalable = self.o3d_volume_scalable.extract_triangle_mesh()
+        # vertices = np.asarray(mesh_open3d_scalable.vertices)
+        # mesh_open3d_scalable = self.vis.get_mesh(vertices,np.asarray(mesh_open3d_scalable.triangles))
+
+        # c_red = (255. / 255., 0 / 255., 0 / 255.)
+        # mesh_open3d_scalable.vertex_colors = o3d.utility.Vector3dVector(np.tile(np.array(c_red).reshape((1,3)),(vertices.shape[0],1)))    
+
+        # print(vertices)
+        # print(np.asarray(mesh_og.vertices))
+
+        # self.vis.plot([mesh_open3d,mesh_og,mesh_open3d_scalable],"Compare Integration",debug=True)
 
 
     def update(self,im,frame_id):
@@ -708,6 +770,13 @@ class TSDFVolume:
     def get_mesh(self):
         """Compute a mesh from the voxel volume using marching cubes.
         """
+
+        # mesh = self.o3d_volume.extract_triangle_mesh()
+        # mesh.compute_vertex_normals()
+
+        # return np.array(mesh.vertices,dtype=np.float32),np.array(mesh.triangles),np.array(mesh.vertex_normals,dtype=np.float32),np.array(mesh.vertex_colors)
+
+
         tsdf_vol, color_vol,weight_vol = self.get_volume()
 
         # self.log.debug(tsdf_vol[tsdf_vol.shape[0]//2,tsdf_vol.shape[1]//2,:])

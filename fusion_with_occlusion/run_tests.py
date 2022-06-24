@@ -27,8 +27,10 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
 
 logging.getLogger('embedded_deformation_graph').setLevel(logging.INFO)
+lepard_nicp_test.test4(use_gpu=True)
+# lepard_nicp_test.test3(use_gpu=True)
 # lepard_nicp_test.test2(use_gpu=True)
-lepard_nicp_test.test1(use_gpu=True)
+# lepard_nicp_test.test1(use_gpu=True)
 
 
 

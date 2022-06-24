@@ -10,6 +10,7 @@ from vis import get_visualizer # Visualizer
 from frame_loader import RGBDVideoLoader
 from embedded_deformation_graph import EDGraph # Create ED graph from mesh, depth image, tsdf 
 from run_lepard import Lepard_runner # SceneFlow module 
+from run_motion_model import MotionCompleteNet_Runner
 from NonRigidICP.model.registration_fusion import Registration as PytorchRegistration
 from lepard.inference import Lepard	
 from warpfield import WarpField # Connects ED Graph and TSDF/Mesh/Whatever needs to be deformed  
@@ -43,7 +44,7 @@ def test1(use_gpu=True):
 		# "datadir": "/media/srialien/2e32b92f-33a0-4f62-a89f-445621302f09/DeepDeform_Tests/dinoET_act2_cam2",\
 		# "datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/mannequin_Running_cam1",\
 		"skip_rate":1,
-		"voxel_size": 0.02})
+		"voxel_size": 0.01})
 	vis = get_visualizer(fopt)
 	
 	frame_loader = RGBDVideoLoader(fopt.datadir)
@@ -80,6 +81,8 @@ def test1(use_gpu=True):
 
 	warpfield = WarpField(graph,tsdf,vis)
 
+
+
 	tsdf.warpfield = warpfield  # Add warpfield to tsdf
 	vis.warpfield = warpfield   # Add warpfield to visualizer
 
@@ -96,6 +99,8 @@ def test1(use_gpu=True):
 
 		target_mask = target_frame_data["im"][-1] > 0	
 		target_pcd = target_frame_data["im"][3:,target_mask].T
+
+
 
 
 		scene_flow,corresp,valid_verts = lepard(source_pcd,target_pcd)
@@ -122,7 +127,8 @@ def test1(use_gpu=True):
 
 		# Register TSDF, tsdf maps to target frame  
 		# tsdf.update(target_frame_data["im"],target_frame_data["id"])
-		target_pcd = vis.get_target_RGBD()
+		# target_pcd = vis.get_target_RGBD()
+
 
 		tsdf.integrate(target_frame_data)
 
@@ -141,12 +147,16 @@ def test1(use_gpu=True):
 
 
 def test2(use_gpu=True): # Passing canoconical model instead of source point cloud 
+
 	fopt = Dict2Class({"source_frame":0,\
 		"gpu":use_gpu,"visualizer":"open3d",\
-		"datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/foxWDFS_Actions2_cam2",\
-		# "datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/mannequin_Running_cam1",\
-		"skip_rate":15,
-		"voxel_size": 0.02})
+		# "datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/dinoET_act2_cam2",\
+		# "datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/foxWDFS_Actions2_cam1",\
+		# "datadir": "/media/srialien/2e32b92f-33a0-4f62-a89f-445621302f09/DeepDeform_Tests/dinoET_act2_cam2",\
+		"datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/mannequin_Running_cam1",\
+		"skip_rate":1,
+		"voxel_size": 0.01})
+
 	vis = get_visualizer(fopt)
 	
 	frame_loader = RGBDVideoLoader(fopt.datadir)
@@ -187,6 +197,8 @@ def test2(use_gpu=True): # Passing canoconical model instead of source point clo
 	source_verts = tsdf.get_canonical_model()[0]
 
 	gradient_descent_optimizer = PytorchRegistration(source_verts,graph,warpfield,cam_intr,vis)		
+	warpfield.optimizer = gradient_descent_optimizer
+
 	# gradient_descent_optimizer.config.iters = 150
 
 
@@ -207,9 +219,6 @@ def test2(use_gpu=True): # Passing canoconical model instead of source point clo
 		target_matches = source_verts.copy()
 		target_matches[valid_verts] += scene_flow[valid_verts]
 
-
-		print(source_verts.shape,target_matches.shape)
-
 		scene_flow_data = {'source':source_verts,'scene_flow': scene_flow,"valid_verts":valid_verts,"target_matches":target_matches,'landmarks':corresp}	
 		optical_flow_data = {'source_id':fopt.source_frame,'target_id':fopt.source_frame+i}
 
@@ -226,6 +235,7 @@ def test2(use_gpu=True): # Passing canoconical model instead of source point clo
 		warpfield.update_transformations(estimated_transformations)
 
 		# Register TSDF, tsdf maps to target frame  
+		tsdf.clear()
 		tsdf.integrate(target_frame_data)
 
 		# self.vis.plot_skinned_model()
@@ -239,9 +249,297 @@ def test2(use_gpu=True): # Passing canoconical model instead of source point clo
 
 
 		# if source_frame > 0:		
-		vis.show(scene_flow_data,fopt.source_frame,debug=False) # plot registration details 
+		vis.show_zoomed_in(scene_flow_data,fopt.source_frame,debug=False) # plot registration details 
 
+
+# Use occlusion fusion with lepard
+def test3(use_gpu=True):  
+
+	fopt = Dict2Class({"source_frame":0,\
+		"gpu":use_gpu,"visualizer":"open3d",\
+		# "datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/dinoET_act2_cam2",\
+		"datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/foxWDFS_Actions2_cam1",\
+		# "datadir": "/media/srialien/2e32b92f-33a0-4f62-a89f-445621302f09/DeepDeform_Tests/dinoET_act2_cam2",\
+		# "datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/mannequin_Running_cam1",\
+		"skip_rate":1,
+		"voxel_size": 0.01})
+
+	vis = get_visualizer(fopt)
+	
+	frame_loader = RGBDVideoLoader(fopt.datadir)
+
+	source_frame_data = frame_loader.get_source_data(fopt.source_frame)
+
+	lepard = Lepard(os.path.join(os.getcwd(),"../lepard/configs/test/4dmatch.yaml"))
+
+	source_mask = source_frame_data["im"][-1] > 0	
+	source_pcd = source_frame_data["im"][3:,source_mask].T
+
+	mask_indices = np.where(source_mask)
+	bbox = [np.min(mask_indices[1]),np.min(mask_indices[0]),np.max(mask_indices[1]),np.max(mask_indices[0])] # x_min, y_min, x_max,y_max\n
+
+	# intrinsics
+	cam_intr = np.eye(3)
+	cam_intr[0, 0] = source_frame_data["intrinsics"][0]
+	cam_intr[1, 1] = source_frame_data["intrinsics"][1]
+	cam_intr[0, 2] = source_frame_data["intrinsics"][2]
+	cam_intr[1, 2] = source_frame_data["intrinsics"][3]
+
+
+	max_depth = source_frame_data["im"][-1].max()
+
+	# Create a new tsdf volume
+	tsdf = TSDFVolume(bbox, max_depth+1, source_frame_data["intrinsics"], fopt,vis)
+	vis.tsdf = tsdf
+	tsdf.integrate(source_frame_data)
+
+	graph = EDGraph(tsdf,vis,source_frame_data)
+	vis.graph  = graph 		# Add graph to visualizer 
+
+	warpfield = WarpField(graph,tsdf,vis)
+
+	tsdf.warpfield = warpfield  # Add warpfield to tsdf
+	vis.warpfield = warpfield   # Add warpfield to visualizer
+
+	source_verts = tsdf.get_canonical_model()[0]
+
+	gradient_descent_optimizer = PytorchRegistration(source_verts,graph,warpfield,cam_intr,vis)		
+	warpfield.optimizer = gradient_descent_optimizer
+
+	# gradient_descent_optimizer.config.iters = 150
+
+	motion_complete_model = MotionCompleteNet_Runner(fopt)	
+	motion_complete_model.graph = graph
+
+	# Save node details for future use by Occlusion fusion
+	np.save(os.path.join(fopt.datadir,"results/visible_nodes",f"{source_frame_data['id']}.npy"),np.ones(graph.nodes.shape[0],dtype=bool))
+
+	for i in range(fopt.skip_rate,len(frame_loader),fopt.skip_rate):
+		print(f"Registering frame:{i}")
+		target_frame_data = frame_loader.get_target_data(fopt.source_frame+i,source_frame_data["cropper"])
+
+
+
+
+		target_mask = target_frame_data["im"][-1] > 0	
+		target_pcd = target_frame_data["im"][3:,target_mask].T
+
+		source_verts = tsdf.get_canonical_model()[0]
+
+
+		scene_flow,corresp,valid_verts = lepard(source_verts,target_pcd)
+		target_matches = source_verts.copy()
+		target_matches[valid_verts] += scene_flow[valid_verts]
+
+		scene_flow_data = {'source':source_verts,'scene_flow': scene_flow,"valid_verts":valid_verts,"target_matches":target_matches,'landmarks':corresp}	
+		optical_flow_data = {'source_id':fopt.source_frame,'target_id':fopt.source_frame+i}
+
+		# Will get updated if T-1 is passed
+		deformed_nodes_at_source = warpfield.get_deformed_nodes()
+		scene_flow_to_target,_,updated_visible_nodes_mask = lepard.find_scene_flow(graph.nodes)
+		deformed_nodes_at_target = graph.nodes + scene_flow_to_target
+
+		# og_graph = vis.get_rendered_graph(deformed_nodes_at_source,graph.edges,color=updated_visible_nodes_mask)
+		# deformed_graph = vis.get_rendered_graph(deformed_nodes_at_target,graph.edges)
+
+		# vis.plot(og_graph + deformed_graph, "Debug", debug=True)
+
+		# print(graph.nodes)
+		# print(deformed_nodes_at_target)
+
+		# Save node details for future use by Occlusion fusion
+		np.save(os.path.join(fopt.datadir,"results/visible_nodes",f"{target_frame_data['id']}.npy"),updated_visible_nodes_mask)
+
+
+		# GCN+LSTM model data
+		estimated_complete_nodes_motion_data = motion_complete_model(target_frame_data["id"] - fopt.skip_rate,
+			deformed_nodes_at_source,
+			deformed_nodes_at_target,
+			updated_visible_nodes_mask)
+
+
+
+		# print(estimated_complete_nodes_motion_data)
+		estimated_complete_nodes_motion_data = (deformed_nodes_at_source + estimated_complete_nodes_motion_data[0],estimated_complete_nodes_motion_data[1])# Add velocity deformed source to get target location
+
+		# print(estimated_complete_nodes_motion_data[0])
+
+		# os._exit(0)
+
+
+		estimated_transformations = gradient_descent_optimizer.optimize(optical_flow_data,
+											scene_flow_data,
+											estimated_complete_nodes_motion_data,
+											target_frame_data)
+
+		estimated_transformations = dict_to_numpy(estimated_transformations)
+
+
+		save_convergance_info(fopt,estimated_transformations["convergence_info"],optical_flow_data["source_id"],optical_flow_data["target_id"])
+
+		# Update warpfield parameters, warpfield maps to target frame  
+		warpfield.update_transformations(estimated_transformations)
+
+		# Register TSDF, tsdf maps to target frame  
 		tsdf.clear()
+		tsdf.integrate(target_frame_data)
+
+		# self.vis.plot_skinned_model()
+
+		# Add new nodes to warpfield and graph if any
+		# update = self.warpfield.update_graph() 
+		update = False
+		print("canoconical model before:",tsdf.get_canonical_model()[0].shape)
+		gradient_descent_optimizer.update(tsdf.get_canonical_model()[0])
+		print("canoconical model after:",tsdf.get_canonical_model()[0].shape)
+
+
+		# if source_frame > 0:		
+		vis.show(scene_flow_data,fopt.source_frame,debug=False) # plot registration details
+
+# Passing deformed model at t-1
+def test4(use_gpu=True):  
+
+	fopt = Dict2Class({"source_frame":0,\
+		"gpu":use_gpu,"visualizer":"open3d",\
+		"datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/dinoET_act2_cam2",\
+		# "datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/foxWDFS_Actions2_cam1",\
+		# "datadir": "/media/srialien/Elements/AT-Datasets/DeepDeform/new_test/mannequin_Running_cam1",\
+		"skip_rate":1,
+		"voxel_size": 0.01})
+
+	vis = get_visualizer(fopt)
+	
+	frame_loader = RGBDVideoLoader(fopt.datadir)
+
+	source_frame_data = frame_loader.get_source_data(fopt.source_frame)
+
+	lepard = Lepard(os.path.join(os.getcwd(),"../lepard/configs/test/4dmatch.yaml"))
+
+	source_mask = source_frame_data["im"][-1] > 0	
+	source_pcd = source_frame_data["im"][3:,source_mask].T
+
+	mask_indices = np.where(source_mask)
+	bbox = [np.min(mask_indices[1]),np.min(mask_indices[0]),np.max(mask_indices[1]),np.max(mask_indices[0])] # x_min, y_min, x_max,y_max\n
+
+	# intrinsics
+	cam_intr = np.eye(3)
+	cam_intr[0, 0] = source_frame_data["intrinsics"][0]
+	cam_intr[1, 1] = source_frame_data["intrinsics"][1]
+	cam_intr[0, 2] = source_frame_data["intrinsics"][2]
+	cam_intr[1, 2] = source_frame_data["intrinsics"][3]
+
+
+	max_depth = source_frame_data["im"][-1].max()
+
+	# Create a new tsdf volume
+	tsdf = TSDFVolume(bbox, max_depth+1, source_frame_data["intrinsics"], fopt,vis)
+	vis.tsdf = tsdf
+	tsdf.integrate(source_frame_data)
+
+	graph = EDGraph(tsdf,vis,source_frame_data)
+	vis.graph  = graph 		# Add graph to visualizer 
+
+	warpfield = WarpField(graph,tsdf,vis)
+
+	tsdf.warpfield = warpfield  # Add warpfield to tsdf
+	vis.warpfield = warpfield   # Add warpfield to visualizer
+
+	source_verts = tsdf.get_canonical_model()[0]
+
+	gradient_descent_optimizer = PytorchRegistration(source_verts,graph,warpfield,cam_intr,vis)		
+	warpfield.optimizer = gradient_descent_optimizer
+
+	# gradient_descent_optimizer.config.iters = 150
+
+	motion_complete_model = MotionCompleteNet_Runner(fopt)	
+	motion_complete_model.graph = graph
+
+	# Save node details for future use by Occlusion fusion
+	np.save(os.path.join(fopt.datadir,"results/visible_nodes",f"{source_frame_data['id']}.npy"),np.ones(graph.nodes.shape[0],dtype=bool))
+
+	for i in range(fopt.skip_rate,len(frame_loader),fopt.skip_rate):
+		print(f"Registering frame:{i}")
+		target_frame_data = frame_loader.get_target_data(fopt.source_frame+i,source_frame_data["cropper"])
+
+
+
+
+		target_mask = target_frame_data["im"][-1] > 0	
+		target_pcd = target_frame_data["im"][3:,target_mask].T
+
+		source_verts = tsdf.get_deformed_model()[0]
+
+
+		scene_flow,corresp,valid_verts = lepard(source_verts,target_pcd)
+		target_matches = source_verts.copy()
+		target_matches[valid_verts] += scene_flow[valid_verts]
+
+		scene_flow_data = {'source':source_verts,'scene_flow': scene_flow,"valid_verts":valid_verts,"target_matches":target_matches,'landmarks':corresp}	
+		optical_flow_data = {'source_id':fopt.source_frame,'target_id':fopt.source_frame+i}
+
+		# Will get updated if T-1 is passed
+		# deformed_nodes_at_source = warpfield.get_deformed_nodes()
+		# scene_flow_to_target,_,updated_visible_nodes_mask = lepard.find_scene_flow(graph.nodes)
+		# deformed_nodes_at_target = graph.nodes + scene_flow_to_target
+
+		# og_graph = vis.get_rendered_graph(deformed_nodes_at_source,graph.edges,color=updated_visible_nodes_mask)
+		# deformed_graph = vis.get_rendered_graph(deformed_nodes_at_target,graph.edges)
+
+		# vis.plot(og_graph + deformed_graph, "Debug", debug=True)
+
+		# print(graph.nodes)
+		# print(deformed_nodes_at_target)
+
+		# Save node details for future use by Occlusion fusion
+		# np.save(os.path.join(fopt.datadir,"results/visible_nodes",f"{target_frame_data['id']}.npy"),updated_visible_nodes_mask)
+
+		# GCN+LSTM model data
+		# estimated_complete_nodes_motion_data = motion_complete_model(target_frame_data["id"] - fopt.skip_rate,
+		# 	deformed_nodes_at_source,
+		# 	deformed_nodes_at_target,
+		# 	updated_visible_nodes_mask)
+
+
+
+		# print(estimated_complete_nodes_motion_data)
+		# estimated_complete_nodes_motion_data = (deformed_nodes_at_source + estimated_complete_nodes_motion_data[0],estimated_complete_nodes_motion_data[1])# Add velocity deformed source to get target location
+
+		# print(estimated_complete_nodes_motion_data[0])
+
+		# os._exit(0)
+
+		estimated_complete_nodes_motion_data = (None,None)
+
+		estimated_transformations = gradient_descent_optimizer.optimize(optical_flow_data,
+											scene_flow_data,
+											estimated_complete_nodes_motion_data,
+											target_frame_data)
+
+		estimated_transformations = dict_to_numpy(estimated_transformations)
+
+
+		save_convergance_info(fopt,estimated_transformations["convergence_info"],optical_flow_data["source_id"],optical_flow_data["target_id"])
+
+		# Update warpfield parameters, warpfield maps to target frame  
+		warpfield.update_transformations(estimated_transformations)
+
+		# Register TSDF, tsdf maps to target frame  
+		tsdf.clear()
+		tsdf.integrate(target_frame_data)
+
+		# self.vis.plot_skinned_model()
+
+		# Add new nodes to warpfield and graph if any
+		# update = self.warpfield.update_graph() 
+		update = False
+		print("canoconical model before:",tsdf.get_canonical_model()[0].shape)
+		gradient_descent_optimizer.update(tsdf.get_canonical_model()[0])
+		print("canoconical model after:",tsdf.get_canonical_model()[0].shape)
+
+
+		# if source_frame > 0:		
+		vis.show_zoomed_in(scene_flow_data,fopt.source_frame,debug=True) # plot registration details
 
 
 

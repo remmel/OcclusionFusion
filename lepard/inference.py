@@ -135,8 +135,11 @@ class Lepard:
 
 		assert len(np.unique(match_pred[:,1])) == match_pred.shape[0] 
 
-		scene_flow,corresp,mask = blend_anchor_motion(source_pcd,src_pcd[match_pred[:,1]],tgt_pcd[match_pred[:,2]] - src_pcd[match_pred[:,1]],knn=3,search_radius=1e-1)
-		# self.plot_scene_flow(source_pcd[mask],target_pcd,scene_flow[mask],corresp)
+		self.query_points = src_pcd[match_pred[:,1]]
+		self.sceneflow_points = tgt_pcd[match_pred[:,2]] - src_pcd[match_pred[:,1]]
+		self.target_points = tgt_pcd
+
+		scene_flow,corresp,mask = self.find_scene_flow(source_pcd)
 
 		print("Scene flows")
 		print(np.mean(np.linalg.norm(tgt_pcd[match_pred[:,2]] - src_pcd[match_pred[:,1]],axis=1)))
@@ -145,6 +148,12 @@ class Lepard:
 
 		return scene_flow,corresp,mask	
 
+	
+	def find_scene_flow(self,source_pcd):
+
+		scene_flow,corresp,mask = blend_anchor_motion(source_pcd,self.query_points,self.sceneflow_points,knn=3,search_radius=1e-1)
+		# self.plot_scene_flow(source_pcd[mask],self.target_points,scene_flow[mask],corresp)
+		return scene_flow,corresp,mask	
 
 	def plot_scene_flow(self,source_pcd,target_pcd,scene_flow,corresp):
 

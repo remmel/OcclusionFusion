@@ -292,3 +292,13 @@ def chamfer_dist(src_pcd,   tgt_pcd):
     return cham_dist
 
 
+def occlusion_fusion_graph_motion_cost(nodes,t,
+                    target_graph_node_location,
+                    target_graph_node_confidence):
+
+    per_node_loss =  target_graph_node_location[:,None]**2 * (nodes + t - target_graph_node_location)**2 
+
+    # print("Per node motion loss:",per_node_loss)
+    # print("Shape:",per_node_loss.shape)
+
+    return torch.mean(per_node_loss)

@@ -1,4 +1,4 @@
-# Python Imports
+	# Python Imports
 import os
 import numpy as np
 import open3d as o3d
@@ -22,11 +22,15 @@ class VisualizeOpen3D(Visualizer):
 		if os.path.isfile(os.path.join(self.savepath,"camera_params.json")):
 			self.camera_params = o3d.io.read_pinhole_camera_parameters(\
 				os.path.join(self.savepath,"camera_params.json"))
-		
+
+		if os.path.isfile(os.path.join(self.savepath,"camera_params_zoomed.json")):
+			self.camera_params_zoomed = o3d.io.read_pinhole_camera_parameters(\
+				os.path.join(self.savepath,"camera_params_zoomed.json"))
+
 	######################################
 	# Helper modules 					 #	
 	######################################	
-	def plot(self,object_list,title,debug,savename=None):
+	def plot(self,object_list,title,debug,savename=None,zoomed_in=True):
 		"""
 			Main Function which takes all open3d objects ans plots them
 			
@@ -51,8 +55,12 @@ class VisualizeOpen3D(Visualizer):
 
 			# ctr.set_up([0,1,0])
 			# ctr.set_lookat([0,0,0])	
-			if hasattr(self,"camera_params"):	
+
+			if hasattr(self,"camera_params") and not zoomed_in :	
 				ctr.convert_from_pinhole_camera_parameters(self.camera_params)	
+
+			if hasattr(self,"camera_params_zoomed") and zoomed_in :	
+				ctr.convert_from_pinhole_camera_parameters(self.camera_params_zoomed)	
 			# ctr.set_zoom(0.3)
 			self.vis_debug.run() # Plot and halt the program
 			self.vis_debug.destroy_window()
@@ -74,8 +82,13 @@ class VisualizeOpen3D(Visualizer):
 			# ctr.set_lookat([0,0,0])
 			# ctr.set_zoom(0.3)
 
-			if hasattr(self,"camera_params"):	
+
+			if hasattr(self,"camera_params") and not zoomed_in :	
 				ctr.convert_from_pinhole_camera_parameters(self.camera_params)	
+
+			if hasattr(self,"camera_params_zoomed") and zoomed_in :	
+				ctr.convert_from_pinhole_camera_parameters(self.camera_params_zoomed)
+
 
 			self.vis.poll_events()
 			self.vis.update_renderer()
@@ -198,6 +211,7 @@ class VisualizeOpen3D(Visualizer):
 		target_depth_savepath = os.path.join(self.savepath,"target_pcd",f"{self.tsdf.frame_id}.xyz")
 		o3d.io.write_point_cloud(target_depth_savepath, target_pcd)
 		target_pcd.translate(trans)
+		
 
 
 
@@ -295,7 +309,7 @@ class VisualizeOpen3D(Visualizer):
 			self.plot([deformed_model,good_matches_set],title="Deformed Model Correspondences",debug=debug,savename=savename)	
 
 	
-	def plot_optimization_sceneflow(self,frame_id,n_iter,warped_points,target_points,target_matches,deformed_nodes,landmarks,debug=True):
+	def plot_optimization_sceneflow(self,frame_id,n_iter,warped_points,target_points,target_matches,deformed_nodes,landmarks,motion_complete_graph_location,debug=True):
 		"""
 			Plot registration during optimization 
 		"""
@@ -307,6 +321,11 @@ class VisualizeOpen3D(Visualizer):
 
 		deformed_graph_rendered = self.get_rendered_graph(viz_utils.transform_pointcloud_to_opengl_coords(deformed_nodes),self.graph.edges)
 
+		if motion_complete_graph_location is not None:
+			motion_complete_graph_color = np.ones(motion_complete_graph_location.shape[0])
+			motion_complete_graph_rendered = self.get_rendered_graph(motion_complete_graph_location,self.graph.edges,color=motion_complete_graph_color)
+		else: 	
+			motion_complete_graph_rendered = []
 
 		warped_points = viz_utils.transform_pointcloud_to_opengl_coords(warped_points)
 		warped_points_rendered = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.asarray(warped_points)))
@@ -339,7 +358,7 @@ class VisualizeOpen3D(Visualizer):
 		match_matches_set.colors = o3d.utility.Vector3dVector(match_matches_colors)
 
 		savename = f"NICP_Lepard_{n_iter}_{frame_id}.png"
-		self.plot(deformed_graph_rendered + [warped_points_rendered,target_points_rendered,match_matches_set],f"Iteration:{n_iter}",debug=debug,savename=savename)
+		self.plot(deformed_graph_rendered + motion_complete_graph_rendered + [warped_points_rendered,target_points_rendered,match_matches_set],f"Iteration:{n_iter}",debug=debug,savename=savename)
 
 	def plot_optimization(self,frame_id,n_iter,deformed_points,valid_verts,target_points,debug=True):
 		"""
@@ -545,7 +564,7 @@ class VisualizeOpen3D(Visualizer):
 		scene_flow[:,0] += bbox[0]
 
 		# n_match_matches = scene_flow_data['source'][scene_flow_data['valid_verts']].shape[0]
-		# match_matches_points = np.concatenate([viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']])[::100], viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]+scene_flow[scene_flow_data['valid_verts']])[::100]], axis=0)
+		# match_matches_points = np.concatenate([viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]), viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]+scene_flow[scene_flow_data['valid_verts']])], axis=0)
 		# match_matches_lines = [[i, i + n_match_matches] for i in range(0, n_match_matches, 1)]
 
 		# # --> Create match (unweighted) lines 
@@ -632,19 +651,19 @@ class VisualizeOpen3D(Visualizer):
 		target_pcd = self.get_target_RGBD()
 		target_pcd.colors = o3d.utility.Vector3dVector(np.array([[0/255, 0/255, 255/255] for i in range(len(target_pcd.points))]))
 
-		# scene_flow = scene_flow_data['scene_flow'] 
-		# # scene_flow[:,0] += bbox[0]
-		# n_match_matches = scene_flow_data['source'][scene_flow_data['valid_verts']].shape[0]
-		# match_matches_points = np.concatenate([viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']])[::100], viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]+scene_flow[scene_flow_data['valid_verts']])[::100]], axis=0)
-		# match_matches_lines = [[i, i + n_match_matches] for i in range(0, n_match_matches, 1)]
+		scene_flow = scene_flow_data['scene_flow'] 
+		# scene_flow[:,0] += bbox[0]
+		n_match_matches = scene_flow_data['source'][scene_flow_data['valid_verts']].shape[0]
+		match_matches_points = np.concatenate([viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']])[::100], viz_utils.transform_pointcloud_to_opengl_coords(scene_flow_data['source'][scene_flow_data['valid_verts']]+scene_flow[scene_flow_data['valid_verts']])[::100]], axis=0)
+		match_matches_lines = [[i, i + n_match_matches] for i in range(0, n_match_matches, 1)]
 
-		# # --> Create match (unweighted) lines 
-		# match_matches_colors = [[201/255, 177/255, 14/255] for i in range(len(match_matches_lines))]
-		# match_matches_set = o3d.geometry.LineSet(
-		# 	points=o3d.utility.Vector3dVector(match_matches_points),
-		# 	lines=o3d.utility.Vector2iVector(match_matches_lines),
-		# )
-		# match_matches_set.colors = o3d.utility.Vector3dVector(match_matches_colors)
+		# --> Create match (unweighted) lines 
+		match_matches_colors = [[201/255, 177/255, 14/255] for i in range(len(match_matches_lines))]
+		match_matches_set = o3d.geometry.LineSet(
+			points=o3d.utility.Vector3dVector(match_matches_points),
+			lines=o3d.utility.Vector2iVector(match_matches_lines),
+		)
+		match_matches_set.colors = o3d.utility.Vector3dVector(match_matches_colors)
 
 
 
@@ -681,7 +700,7 @@ class VisualizeOpen3D(Visualizer):
 			# match_matches_set,
 			rendered_deformed_nodes,rendered_deformed_edges,
 			# canonical_mesh,rendered_graph_nodes,rendered_graph_edges,
-			deformed_mesh],"Showing frame",debug,savename=image_path)
+			deformed_mesh],"Showing frame",debug,savename=image_path,zoomed_in=True)
 
 
 
