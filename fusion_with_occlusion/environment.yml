@@ -1,4 +1,4 @@
-name: pytorch3d
+name: occlusionfuf
 channels:
   - https://anaconda.org/pytorch3d/pytorch3d/0.7.5/download
   - pyg

@@ -30,7 +30,7 @@ or
 
 ```shell
 # Recreating yourself
-conda create -n pytorch3d python=3.10 && conda activate pytorch3d
+conda create -n occlusionfuf python=3.10 && conda activate occlusionfuf
 # chose that version or pytorch and python to match with conda built version of pytorch3d
 conda install pytorch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 pytorch-cuda=11.8 -c pytorch -c nvidia
 
