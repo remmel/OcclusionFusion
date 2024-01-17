@@ -32,7 +32,7 @@ def get_extensions():
     sources = main_file + source_cpu
     extension = CppExtension
 
-    extra_compile_args = {"cxx": ['-O3', '-Wall', '-shared', '-std=c++14', '-fPIC', '-fopenmp']}
+    extra_compile_args = {"cxx": ['-O3', '-Wall', '-shared', '-std=c++17', '-fPIC', '-fopenmp']}
     define_macros = []
 
     sources = [os.path.join(extensions_dir, s) for s in sources]

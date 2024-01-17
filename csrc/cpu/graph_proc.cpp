@@ -7,7 +7,8 @@
 #include <random> 
 #include <iostream>
 
-#include <Eigen/Dense>
+//#include <Eigen/Dense>
+#include <eigen3/Eigen/Dense>
 
 using std::vector;
 

@@ -395,7 +395,7 @@ class TSDFVolume:
         if self.frame_id == self.fopt.source_frame: 
             logging.info("Source frame registering. Hence no need for deformation")
             cam_pts = self.world_pts
-            valid_points = np.ones(self._vol_dim,dtype=np.bool).reshape(-1)
+            valid_points = np.ones(self._vol_dim,dtype=bool).reshape(-1)
 
         else:
             cam_pts,valid_points = self.warpfield.deform_tsdf()   

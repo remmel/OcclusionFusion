@@ -38,7 +38,7 @@ def get_extensions():
     sources = main_file + source_cpu
     extension = CppExtension
 
-    extra_compile_args = {"cxx": ['-O3', '-Wall', '-shared', '-std=c++14', '-fPIC', '-fopenmp']}
+    extra_compile_args = {"cxx": ['-O3', '-Wall', '-shared', '-std=c++17', '-fPIC', '-fopenmp']}
     define_macros = []
 
     if (torch.cuda.is_available() and CUDA_HOME is not None) or os.getenv("FORCE_CUDA", "0") == "1":

@@ -16,6 +16,62 @@ Each datadir folder contains
 pip install pynput pycuda cupy pykdtree
 ```  
 
+# Full installation with all dependencies
+
+## 1.a Conda/Pip install - importing my environment
+```shell
+conda env create -f environment.yml
+# conda env export | grep -v "^prefix: " > environment.yml
+```
+
+or
+
+## 1.b Conda/Pip install - commands
+
+```shell
+# Recreating yourself
+conda create -n pytorch3d python=3.10 && conda activate pytorch3d
+# chose that version or pytorch and python to match with conda built version of pytorch3d
+conda install pytorch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 pytorch-cuda=11.8 -c pytorch -c nvidia
+
+# install pytorch3d (painfull)
+conda install -c fvcore -c iopath -c conda-forge fvcore iopath
+conda install https://anaconda.org/pytorch3d/pytorch3d/0.7.5/download/linux-64/pytorch3d-0.7.5-py310_cu118_pyt210.tar.bz2 #it fails: conda install pytorch3d::pytorch3d
+
+# install other packages
+conda install pyg::pytorch-scatter pyg::pytorch-sparse pyg::pytorch-cluster pyg::pytorch-spline-conv pyg::pyg
+conda install conda-forge::kornia conda-forge::cupy conda-forge::pycuda conda-forge::pykdtree
+
+pip install scikit-image numba tensorboardx nibabel easydict open3d opencv-python pybind11 plyfile pynput
+```
+
+## 2. Building dependencies
+
+```shell
+
+# NeuralNRT
+cd csrc
+python setup.py install
+
+#MVRegC
+cd NonRigidICP/cxx
+python setup.py install
+
+#Lepard
+cd lepard/cpp_wrappers
+./compile_wrappers.sh
+
+# Lietorch (conda install -c lietorch lietorch leads to symbol not found)
+#cd NonRigidICP/lietorch
+#git clone https://github.com/princeton-vl/lietorch.git
+export CUDA_HOME=/usr/local/cuda #otherwise cuda.h missing error
+#export LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+#export PATH=${CUDA_HOME}/bin:${PATH}
+python setup.py install
+# todo try instead: pip install git+https://github.com/princeton-vl/lietorch.git
+```
+
+
 # Files: 
 - [ ] fusion.py 					// Main file for fusion based on dynamic fusion 
 

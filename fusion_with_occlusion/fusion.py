@@ -54,7 +54,7 @@ class DynamicFusion:
 		max_depth = source_data["im"][-1].max()
 
 		# Create a new tsdf volume
-		self.tsdf = TSDFVolume(max_depth+1, source_data["intrinsics"], self.opt,self.vis)
+		self.tsdf = TSDFVolume((0,0,2,2), max_depth+1, source_data["intrinsics"], self.opt,self.vis)
 
 		# Add TSDF to visualizer
 		self.vis.tsdf = self.tsdf

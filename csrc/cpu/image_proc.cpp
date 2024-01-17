@@ -1,6 +1,7 @@
 #include "cpu/image_proc.h"
 
-#include <Eigen/Dense>
+//#include <Eigen/Dense>
+#include <eigen3/Eigen/Dense>
 #include <map>
 #include <string>
 #include <cmath>
